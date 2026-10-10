@@ -66,6 +66,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 | `smartdns toggle` | Toggle DNS state (on / off) |
 | `smartdns status` | Show detailed status of service, active interface, and DNS |
 | `smartdns test [domains...]` | Test DNS resolution speed, TLS ping, and HTTP status codes |
+| `smartdns update` | Update SmartDNS to the latest release from GitHub |
 
 ---
 

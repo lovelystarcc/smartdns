@@ -56,6 +56,12 @@ $SUDO chmod +x "$TARGET_BIN"
 echo "==> SmartDNS successfully installed to $TARGET_BIN"
 "$TARGET_BIN" version
 
+# Restart background daemon if already running
+if "$TARGET_BIN" service status 2>&1 | grep -q "running"; then
+    echo "==> Restarting background service with the updated version..."
+    $SUDO "$TARGET_BIN" service restart || true
+fi
+
 echo ""
 echo "Quick start:"
 echo "  sudo smartdns setup <your-doh-url> [profile-name]"

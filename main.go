@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
@@ -20,7 +21,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.0.0"
+const Version = "1.1.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -34,6 +35,7 @@ func printHelp() {
   %stoggle%s           Toggle state (enable / disable)
   %sstatus%s           Show service, network interface, and DNS status
   %stest%s [domains...] Test latency and routing to domains
+  %supdate%s           Update SmartDNS to latest version from GitHub
 
 %sPROFILE MANAGEMENT:%s
   %slist%s             List all configured DNS profiles
@@ -53,6 +55,7 @@ func printHelp() {
   smartdns setup https://dns.example.com/dns-query personal
   smartdns on
   smartdns test
+  smartdns update
   smartdns off
 `,
 		tester.Bold, Version, tester.Reset,
@@ -60,6 +63,7 @@ func printHelp() {
 		tester.Bold, tester.Reset,
 		tester.Green, tester.Reset,
 		tester.Yellow, tester.Reset,
+		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
@@ -128,6 +132,9 @@ func main() {
 
 	case "daemon", "run":
 		handleDaemon()
+
+	case "update", "upgrade":
+		handleUpdate()
 
 	default:
 		fmt.Printf("%sUnknown command: %s%s\n\n", tester.Red, cmd, tester.Reset)
@@ -604,3 +611,16 @@ func handleDaemon() {
 		break
 	}
 }
+
+func handleUpdate() {
+	fmt.Printf("%s==> Updating SmartDNS to latest version from GitHub...%s\n", tester.Bold, tester.Reset)
+	cmd := exec.Command("bash", "-c", "curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh | bash")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("%sUpdate failed: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+}
+
