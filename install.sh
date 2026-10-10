@@ -21,17 +21,19 @@ case "$ARCH" in
 esac
 
 TARGET_DIR="/usr/local/bin"
-if [ "$OS" = "darwin" ] && [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin" ]; then
+if [ "$OS" = "darwin" ] && [ -d "/opt/homebrew/bin" ]; then
     TARGET_DIR="/opt/homebrew/bin"
-fi
-
-SUDO=""
-if [ ! -w "$TARGET_DIR" ]; then
-    SUDO="sudo"
 fi
 
 BIN_NAME="smartdns-${OS}-${ARCH}"
 TARGET_BIN="${TARGET_DIR}/smartdns"
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    if [ ! -w "$TARGET_DIR" ] || [ -f "$TARGET_BIN" -a ! -w "$TARGET_BIN" ]; then
+        SUDO="sudo"
+    fi
+fi
 
 # If installing from local build or downloading prebuilt from GitHub
 if [ -f "dist/${BIN_NAME}" ]; then
@@ -42,21 +44,27 @@ elif command -v go >/dev/null 2>&1 && [ -f "main.go" ]; then
 else
     echo "Downloading smartdns for ${OS}/${ARCH} from GitHub release..."
     DOWNLOAD_URL="https://github.com/lovelystarcc/smartdns/releases/latest/download/${BIN_NAME}"
+    TMP_BIN="/tmp/smartdns_download_$$"
+    rm -f "$TMP_BIN"
     if command -v curl >/dev/null 2>&1; then
-        $SUDO curl -fsSL "$DOWNLOAD_URL" -o "$TARGET_BIN"
+        curl -fsSL "$DOWNLOAD_URL" -o "$TMP_BIN"
     elif command -v wget >/dev/null 2>&1; then
-        $SUDO wget -qO "$TARGET_BIN" "$DOWNLOAD_URL"
+        wget -qO "$TMP_BIN" "$DOWNLOAD_URL"
     else
         echo "Error: curl or wget is required to download prebuilt binary."
         exit 1
     fi
-fi
 
-$SUDO chmod +x "$TARGET_BIN"
+    chmod +x "$TMP_BIN"
 
-# Apply ad-hoc signature on macOS (required for arm64 Apple Silicon)
-if [ "$OS" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
-    $SUDO codesign -s - -f "$TARGET_BIN" >/dev/null 2>&1 || true
+    # Apply ad-hoc signature on macOS (required for arm64 Apple Silicon)
+    if [ "$OS" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+        codesign -s - -f "$TMP_BIN" >/dev/null 2>&1 || true
+    fi
+
+    # Atomically replace destination binary (avoids text-file-busy and curl 23 write errors)
+    $SUDO mv -f "$TMP_BIN" "$TARGET_BIN"
+    $SUDO chmod +x "$TARGET_BIN"
 fi
 
 echo "==> SmartDNS successfully installed to $TARGET_BIN"
