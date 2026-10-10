@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,24 @@ import (
 
 	"github.com/miekg/dns"
 )
+
+type UpstreamState int
+
+const (
+	StateHealthy UpstreamState = iota
+	StateDegraded
+)
+
+func (s UpstreamState) String() string {
+	switch s {
+	case StateHealthy:
+		return "Healthy"
+	case StateDegraded:
+		return "Degraded (Fallback Active)"
+	default:
+		return "Unknown"
+	}
+}
 
 type cacheItem struct {
 	msg     *dns.Msg
@@ -33,6 +52,11 @@ type Server struct {
 	udpServer *dns.Server
 	tcpServer *dns.Server
 	stopCh    chan struct{}
+
+	// Health and Fallback state
+	stateMu          sync.RWMutex
+	state            UpstreamState
+	consecutiveFails int
 }
 
 func New(cfg *config.Config) *Server {
@@ -40,6 +64,7 @@ func New(cfg *config.Config) *Server {
 		cfg:    cfg,
 		cache:  make(map[string]cacheItem),
 		stopCh: make(chan struct{}),
+		state:  StateHealthy,
 	}
 	s.initHTTPClient()
 	return s
@@ -68,7 +93,6 @@ func (s *Server) initHTTPClient() {
 		KeepAlive: 30 * time.Second,
 	}
 
-	// Custom resolver for DoH server host to avoid recursion
 	s.transport = &http.Transport{
 		Proxy:                 nil,
 		ForceAttemptHTTP2:     true,
@@ -102,7 +126,7 @@ func (s *Server) initHTTPClient() {
 
 	s.client = &http.Client{
 		Transport: s.transport,
-		Timeout:   5 * time.Second,
+		Timeout:   4 * time.Second,
 	}
 }
 
@@ -130,16 +154,48 @@ func resolveViaBootstrap(ctx context.Context, host string, bootstraps []string) 
 	return "", fmt.Errorf("bootstrap resolution failed for %s", host)
 }
 
+func (s *Server) getFallbackServers() []string {
+	servers := []string{"1.1.1.1:53", "8.8.8.8:53", "77.88.8.8:53"}
+	if gw := network.GetPhysicalGateway(); gw != "" {
+		servers = append([]string{gw + ":53"}, servers...)
+	}
+	return servers
+}
+
+func isLocalOrCaptive(domain string) bool {
+	d := strings.ToLower(strings.TrimSuffix(domain, "."))
+	if strings.HasSuffix(d, ".local") || strings.HasSuffix(d, ".lan") ||
+		strings.HasSuffix(d, ".home") || strings.HasSuffix(d, ".internal") ||
+		d == "localhost" {
+		return true
+	}
+	captiveDomains := []string{
+		"captive.apple.com",
+		"connectivitycheck.gstatic.com",
+		"connectivitycheck.android.com",
+		"detectportal.firefox.com",
+		"msftconnecttest.com",
+		"ipv6.msftconnecttest.com",
+		"www.msftconnecttest.com",
+		"networkcheck.kde.org",
+	}
+	for _, cd := range captiveDomains {
+		if d == cd || strings.HasSuffix(d, "."+cd) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) Start() error {
 	addr := s.cfg.ListenAddr
 	if addr == "" {
 		addr = "127.0.0.1:53"
 	}
 
-	dns.HandleFunc(".", s.handleDNS)
-
-	s.udpServer = &dns.Server{Addr: addr, Net: "udp"}
-	s.tcpServer = &dns.Server{Addr: addr, Net: "tcp"}
+	handler := dns.HandlerFunc(s.handleDNS)
+	s.udpServer = &dns.Server{Addr: addr, Net: "udp", Handler: handler}
+	s.tcpServer = &dns.Server{Addr: addr, Net: "tcp", Handler: handler}
 
 	errCh := make(chan error, 2)
 
@@ -159,6 +215,9 @@ func (s *Server) Start() error {
 
 	// Background cache cleaner
 	go s.cleanCacheLoop()
+
+	// Background health checker and auto-recovery
+	go s.healthCheckLoop()
 
 	select {
 	case err := <-errCh:
@@ -201,6 +260,126 @@ func (s *Server) cleanCacheLoop() {
 	}
 }
 
+func (s *Server) recordFailure(upstream string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	s.consecutiveFails++
+	if s.consecutiveFails >= 3 && s.state == StateHealthy {
+		s.state = StateDegraded
+		log.Printf("[smartdns] ⚠️ Upstream DoH (%s) failed 3 consecutive times. Switched to Automatic Fallback mode (routing via standard DNS without delay).", upstream)
+	}
+}
+
+func (s *Server) recordSuccess(upstream string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	if s.state == StateDegraded {
+		s.state = StateHealthy
+		log.Printf("[smartdns] ✅ Primary Upstream DoH (%s) recovered! Restored SmartDNS routing.", upstream)
+	}
+	s.consecutiveFails = 0
+}
+
+func (s *Server) healthCheckLoop() {
+	ticker := time.NewTicker(4 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.stateMu.RLock()
+			isDegraded := (s.state == StateDegraded)
+			s.stateMu.RUnlock()
+
+			if isDegraded {
+				active := s.cfg.GetActive()
+				if active == nil || active.Upstream == "" {
+					continue
+				}
+				probe := new(dns.Msg)
+				probe.SetQuestion("cloudflare.com.", dns.TypeA)
+				resp, err := s.queryDoHWithTimeout(probe, active.Upstream, 2*time.Second)
+				if err == nil && resp != nil && resp.Rcode == dns.RcodeSuccess {
+					s.recordSuccess(active.Upstream)
+				}
+			}
+		}
+	}
+}
+
+func (s *Server) queryFallback(r *dns.Msg) (*dns.Msg, error) {
+	fallbacks := s.getFallbackServers()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	type result struct {
+		msg *dns.Msg
+		err error
+	}
+	ch := make(chan result, len(fallbacks))
+
+	for _, target := range fallbacks {
+		go func(srv string) {
+			c := &dns.Client{
+				Net:     "udp",
+				Timeout: 1200 * time.Millisecond,
+			}
+			req := r.Copy()
+			resp, _, err := c.ExchangeContext(ctx, req, srv)
+			if err == nil && resp != nil {
+				ch <- result{msg: resp, err: nil}
+			} else {
+				ch <- result{msg: nil, err: err}
+			}
+		}(target)
+	}
+
+	var lastErr error
+	for i := 0; i < len(fallbacks); i++ {
+		select {
+		case res := <-ch:
+			if res.err == nil && res.msg != nil {
+				cancel()
+				return res.msg, nil
+			}
+			lastErr = res.err
+		case <-ctx.Done():
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, fmt.Errorf("fallback query timed out")
+		}
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("all fallback resolvers failed")
+}
+
+func (s *Server) cacheResponse(cacheKey string, resp *dns.Msg) {
+	if len(resp.Answer) == 0 {
+		return
+	}
+	ttl := resp.Answer[0].Header().Ttl
+	if ttl < 5 {
+		ttl = 5
+	}
+	if ttl > 3600 {
+		ttl = 3600
+	}
+	s.cacheMu.Lock()
+	s.cache[cacheKey] = cacheItem{
+		msg:     resp.Copy(),
+		expires: time.Now().Add(time.Duration(ttl) * time.Second),
+	}
+	s.cacheMu.Unlock()
+}
+
 func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
 		dns.HandleFailed(w, r)
@@ -210,7 +389,17 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	q := r.Question[0]
 	cacheKey := fmt.Sprintf("%s:%d:%d", q.Name, q.Qtype, q.Qclass)
 
-	// 1. Check cache
+	// 1. Direct local / captive portal bypass
+	if isLocalOrCaptive(q.Name) {
+		resp, err := s.queryFallback(r)
+		if err == nil && resp != nil {
+			resp.Id = r.Id
+			_ = w.WriteMsg(resp)
+			return
+		}
+	}
+
+	// 2. Check cache
 	s.cacheMu.RLock()
 	item, found := s.cache[cacheKey]
 	s.cacheMu.RUnlock()
@@ -223,43 +412,54 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		return
 	}
 
-	// 2. Query Upstream DoH
+	// 3. Check circuit breaker state
+	s.stateMu.RLock()
+	currentState := s.state
+	s.stateMu.RUnlock()
+
 	active := s.cfg.GetActive()
-	if active == nil || active.Upstream == "" {
-		dns.HandleFailed(w, r)
-		return
+	var resp *dns.Msg
+	var err error
+
+	if currentState == StateHealthy && active != nil && active.Upstream != "" {
+		// Normal path: Query Primary DoH with a 2.5s timeout
+		resp, err = s.queryDoHWithTimeout(r, active.Upstream, 2500*time.Millisecond)
+		if err != nil {
+			log.Printf("[smartdns] ⚠️ Upstream DoH error for %s (%v). Failing over to fallback DNS...", q.Name, err)
+			s.recordFailure(active.Upstream)
+
+			// Instant failover to parallel fallback
+			resp, err = s.queryFallback(r)
+			if err != nil {
+				log.Printf("[smartdns] ❌ Fallback also failed for %s: %v", q.Name, err)
+				dns.HandleFailed(w, r)
+				return
+			}
+		} else {
+			s.recordSuccess(active.Upstream)
+		}
+	} else {
+		// Circuit breaker tripped or no profile: go straight to fallback to avoid timeout latency
+		resp, err = s.queryFallback(r)
+		if err != nil {
+			log.Printf("[smartdns] ❌ Fallback query failed for %s: %v", q.Name, err)
+			dns.HandleFailed(w, r)
+			return
+		}
 	}
 
-	resp, err := s.queryDoH(r, active.Upstream)
-	if err != nil {
-		log.Printf("[smartdns] DoH query error to %s: %v", active.Upstream, err)
-		dns.HandleFailed(w, r)
-		return
-	}
-
-	// 3. Cache response if TTL > 0
-	ttl := uint32(60)
-	if len(resp.Answer) > 0 {
-		ttl = resp.Answer[0].Header().Ttl
-		if ttl < 5 {
-			ttl = 5
-		}
-		if ttl > 3600 {
-			ttl = 3600
-		}
-		s.cacheMu.Lock()
-		s.cache[cacheKey] = cacheItem{
-			msg:     resp.Copy(),
-			expires: now.Add(time.Duration(ttl) * time.Second),
-		}
-		s.cacheMu.Unlock()
-	}
+	// 4. Cache response
+	s.cacheResponse(cacheKey, resp)
 
 	resp.Id = r.Id
 	_ = w.WriteMsg(resp)
 }
 
 func (s *Server) queryDoH(req *dns.Msg, dohURL string) (*dns.Msg, error) {
+	return s.queryDoHWithTimeout(req, dohURL, 3*time.Second)
+}
+
+func (s *Server) queryDoHWithTimeout(req *dns.Msg, dohURL string, timeout time.Duration) (*dns.Msg, error) {
 	wire, err := req.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack DNS message: %w", err)
@@ -270,8 +470,11 @@ func (s *Server) queryDoH(req *dns.Msg, dohURL string) (*dns.Msg, error) {
 		return nil, fmt.Errorf("invalid upstream URL: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	httpReq, err := http.NewRequestWithContext(
-		context.Background(),
+		ctx,
 		http.MethodPost,
 		u.String(),
 		bytes.NewReader(wire),

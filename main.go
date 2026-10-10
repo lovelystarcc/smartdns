@@ -266,6 +266,14 @@ func handleStatus() {
 		fmt.Printf(" Active profile                  : %sNot configured%s (run: smartdns setup <url>)\n", tester.Yellow, tester.Reset)
 	}
 
+	// 4. Auto-Fallback Protection
+	gw := network.GetPhysicalGateway()
+	fallbacks := []string{"1.1.1.1", "8.8.8.8", "77.88.8.8"}
+	if gw != "" {
+		fallbacks = append([]string{gw + " (Gateway)"}, fallbacks...)
+	}
+	fmt.Printf(" Auto-Fallback Protection        : %s● Active%s (%s)\n", tester.Green, tester.Reset, strings.Join(fallbacks, ", "))
+
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
 	fmt.Printf(" Total profiles: %d (use %ssmartdns list%s)\n\n", len(cfg.Profiles), tester.Cyan, tester.Reset)
 }
