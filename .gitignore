@@ -1,0 +1,29 @@
+# Binaries and build artifacts
+smartdns
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Temporary files and caches
+*.tmp
+*.temp
+/tmp/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+*.err
+
+# Local configs and test artifacts
+config.json
+scratch/
