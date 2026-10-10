@@ -361,16 +361,19 @@ func (s *Server) queryFallback(r *dns.Msg) (*dns.Msg, error) {
 	return nil, fmt.Errorf("all fallback resolvers failed")
 }
 
-func (s *Server) cacheResponse(cacheKey string, resp *dns.Msg) {
+func (s *Server) cacheResponse(cacheKey string, resp *dns.Msg, isFallback bool) {
 	if len(resp.Answer) == 0 {
 		return
 	}
-	ttl := resp.Answer[0].Header().Ttl
-	if ttl < 5 {
-		ttl = 5
-	}
-	if ttl > 3600 {
-		ttl = 3600
+	ttl := uint32(5)
+	if !isFallback {
+		ttl = resp.Answer[0].Header().Ttl
+		if ttl < 5 {
+			ttl = 5
+		}
+		if ttl > 3600 {
+			ttl = 3600
+		}
 	}
 	s.cacheMu.Lock()
 	s.cache[cacheKey] = cacheItem{
@@ -420,6 +423,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	active := s.cfg.GetActive()
 	var resp *dns.Msg
 	var err error
+	usedFallback := false
 
 	if currentState == StateHealthy && active != nil && active.Upstream != "" {
 		// Normal path: Query Primary DoH with a 2.5s timeout
@@ -430,6 +434,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 			// Instant failover to parallel fallback
 			resp, err = s.queryFallback(r)
+			usedFallback = true
 			if err != nil {
 				log.Printf("[smartdns] ❌ Fallback also failed for %s: %v", q.Name, err)
 				dns.HandleFailed(w, r)
@@ -441,6 +446,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	} else {
 		// Circuit breaker tripped or no profile: go straight to fallback to avoid timeout latency
 		resp, err = s.queryFallback(r)
+		usedFallback = true
 		if err != nil {
 			log.Printf("[smartdns] ❌ Fallback query failed for %s: %v", q.Name, err)
 			dns.HandleFailed(w, r)
@@ -448,8 +454,8 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 4. Cache response
-	s.cacheResponse(cacheKey, resp)
+	// 4. Cache response (short 5s TTL for fallback to prevent sticking to Direct IP)
+	s.cacheResponse(cacheKey, resp, usedFallback)
 
 	resp.Id = r.Id
 	_ = w.WriteMsg(resp)
