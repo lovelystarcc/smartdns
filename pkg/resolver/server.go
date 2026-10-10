@@ -27,6 +27,8 @@ const (
 	StateDegraded
 )
 
+const MaxCacheEntries = 10000
+
 func (s UpstreamState) String() string {
 	switch s {
 	case StateHealthy:
@@ -136,20 +138,64 @@ func stringsContainsPort(s string) bool {
 }
 
 func resolveViaBootstrap(ctx context.Context, host string, bootstraps []string) (string, error) {
+	if len(bootstraps) == 0 {
+		return "", fmt.Errorf("no bootstrap servers provided")
+	}
+
+	raceCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(host), dns.TypeA)
-	c := new(dns.Client)
-	c.Timeout = 2 * time.Second
+
+	type result struct {
+		ip  string
+		err error
+	}
+	ch := make(chan result, len(bootstraps))
 
 	for _, b := range bootstraps {
-		r, _, err := c.ExchangeContext(ctx, m, b)
-		if err == nil && r != nil && len(r.Answer) > 0 {
-			for _, ans := range r.Answer {
-				if a, ok := ans.(*dns.A); ok {
-					return a.A.String(), nil
+		go func(srv string) {
+			c := &dns.Client{
+				Net:     "udp",
+				Timeout: 1500 * time.Millisecond,
+			}
+			req := m.Copy()
+			resp, _, err := c.ExchangeContext(raceCtx, req, srv)
+			if err == nil && resp != nil && len(resp.Answer) > 0 {
+				for _, ans := range resp.Answer {
+					if a, ok := ans.(*dns.A); ok {
+						ch <- result{ip: a.A.String(), err: nil}
+						return
+					}
 				}
 			}
+			if err == nil {
+				err = fmt.Errorf("no A record from %s", srv)
+			}
+			ch <- result{ip: "", err: err}
+		}(b)
+	}
+
+	var lastErr error
+	for i := 0; i < len(bootstraps); i++ {
+		select {
+		case res := <-ch:
+			if res.err == nil && res.ip != "" {
+				cancel()
+				return res.ip, nil
+			}
+			lastErr = res.err
+		case <-raceCtx.Done():
+			if lastErr != nil {
+				return "", lastErr
+			}
+			return "", fmt.Errorf("bootstrap resolution timed out for %s", host)
 		}
+	}
+
+	if lastErr != nil {
+		return "", lastErr
 	}
 	return "", fmt.Errorf("bootstrap resolution failed for %s", host)
 }
@@ -376,11 +422,33 @@ func (s *Server) cacheResponse(cacheKey string, resp *dns.Msg, isFallback bool) 
 		}
 	}
 	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	// Enforce maximum cache capacity to avoid memory leaks (e.g. DNS water torture attacks)
+	if len(s.cache) >= MaxCacheEntries {
+		now := time.Now()
+		for k, v := range s.cache {
+			if now.After(v.expires) {
+				delete(s.cache, k)
+			}
+		}
+		// If still at or over capacity, evict 10% of entries
+		if len(s.cache) >= MaxCacheEntries {
+			evictCount := MaxCacheEntries / 10
+			for k := range s.cache {
+				delete(s.cache, k)
+				evictCount--
+				if evictCount <= 0 {
+					break
+				}
+			}
+		}
+	}
+
 	s.cache[cacheKey] = cacheItem{
 		msg:     resp.Copy(),
 		expires: time.Now().Add(time.Duration(ttl) * time.Second),
 	}
-	s.cacheMu.Unlock()
 }
 
 func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {

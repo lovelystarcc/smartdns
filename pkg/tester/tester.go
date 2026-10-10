@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"smartdns/pkg/network"
+
 	"github.com/miekg/dns"
 )
 
@@ -74,7 +76,9 @@ func Run(domains []string, vpsHost string) {
 	}
 
 	targetIP := vpsHost
-	if ip := net.ParseIP(vpsHost); ip == nil && vpsHost != "" {
+	if ip := network.ParseIPFromHostname(vpsHost); ip != nil {
+		targetIP = ip.String()
+	} else if vpsHost != "" {
 		if ips, err := net.LookupIP(vpsHost); err == nil && len(ips) > 0 {
 			targetIP = ips[0].String()
 		}
@@ -230,7 +234,7 @@ func testDomain(domain, vpsIP string) *Result {
 		for _, ans := range r.Answer {
 			if a, ok := ans.(*dns.A); ok {
 				res.Resolved = a.A.String()
-				if res.Resolved == vpsIP || res.Resolved == "95.81.102.20" || res.Resolved == "157.22.177.90" || res.Resolved == "132.243.112.221" {
+				if vpsIP != "" && res.Resolved == vpsIP {
 					res.IsProxy = true
 				}
 				break

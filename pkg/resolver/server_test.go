@@ -1,7 +1,9 @@
 package resolver
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 	"smartdns/pkg/config"
@@ -81,5 +83,48 @@ func TestQueryFallback(t *testing.T) {
 	}
 	if resp == nil || len(resp.Answer) == 0 {
 		t.Fatalf("expected non-empty DNS answer from fallback, got %v", resp)
+	}
+}
+
+func TestCacheLimit(t *testing.T) {
+	cfg := config.DefaultConfig()
+	s := New(cfg)
+
+	msg := new(dns.Msg)
+	msg.SetQuestion("example.com.", dns.TypeA)
+	msg.Answer = append(msg.Answer, &dns.A{
+		Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		A:   []byte{93, 184, 216, 34},
+	})
+
+	// Pre-fill cache with MaxCacheEntries items
+	s.cacheMu.Lock()
+	for i := 0; i < MaxCacheEntries; i++ {
+		s.cache[string(rune(i))] = cacheItem{
+			msg:     msg.Copy(),
+			expires: time.Now().Add(10 * time.Minute),
+		}
+	}
+	s.cacheMu.Unlock()
+
+	// Cache one more item, which triggers eviction
+	s.cacheResponse("new_item", msg, false)
+
+	s.cacheMu.RLock()
+	cacheLen := len(s.cache)
+	s.cacheMu.RUnlock()
+
+	if cacheLen > MaxCacheEntries {
+		t.Errorf("cache size %d exceeded maximum %d", cacheLen, MaxCacheEntries)
+	}
+}
+
+func TestResolveViaBootstrap(t *testing.T) {
+	ip, err := resolveViaBootstrap(context.Background(), "google.com", []string{"1.1.1.1:53", "8.8.8.8:53"})
+	if err != nil {
+		t.Fatalf("resolveViaBootstrap failed: %v", err)
+	}
+	if ip == "" {
+		t.Fatal("expected non-empty IP from bootstrap resolution")
 	}
 }
