@@ -21,7 +21,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.2.0"
+const Version = "1.2.1"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
