@@ -21,7 +21,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.1.0"
+const Version = "1.2.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -319,7 +319,8 @@ func handleTest() {
 
 	fmt.Printf(" Local resolver (127.0.0.1:53) : %s\n", resStatus)
 	fmt.Printf(" System DNS (%-18s) : %s\n", iface, sysStatus)
-	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────────────────" + tester.Reset + "\n")
+	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────────────────" + tester.Reset)
+	fmt.Println()
 
 	tester.Run(domains, vpsIP)
 }

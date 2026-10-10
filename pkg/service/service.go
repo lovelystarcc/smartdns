@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,11 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
+
+	"smartdns/pkg/network"
+
+	"github.com/miekg/dns"
 )
 
 const (
@@ -84,13 +90,18 @@ func Install(binPath string) error {
 	if runtime.GOOS == "linux" {
 		unitContent := fmt.Sprintf(`[Unit]
 Description=SmartDNS Daemon (DoH to UDP/TCP Forwarder)
-After=network.target
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=%s daemon
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
-RestartSec=3
+RestartSec=2
+LimitNOFILE=65535
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
@@ -169,13 +180,15 @@ func Restart() error {
 	if _, err := os.Stat(MacPlistPath); os.IsNotExist(err) && runtime.GOOS == "darwin" {
 		return nil
 	}
+	if _, err := os.Stat(LinuxUnit); os.IsNotExist(err) && runtime.GOOS == "linux" {
+		return nil
+	}
 	_ = Stop()
 	return Start()
 }
 
 func Status() (bool, int, error) {
 	if runtime.GOOS == "darwin" {
-		// 1. Try pgrep (fast, reliable, requires no sudo)
 		cmdPgrep := exec.Command("pgrep", "-x", "smartdns")
 		if out, err := cmdPgrep.Output(); err == nil {
 			pidStr := strings.TrimSpace(strings.Split(string(out), "\n")[0])
@@ -184,7 +197,6 @@ func Status() (bool, int, error) {
 			}
 		}
 
-		// 2. Try launchctl print system/com.smartdns.daemon
 		cmdPrint := exec.Command("launchctl", "print", "system/"+MacLabel)
 		if out, err := cmdPrint.Output(); err == nil {
 			s := string(out)
@@ -205,25 +217,55 @@ func Status() (bool, int, error) {
 		cmd := exec.Command("systemctl", "is-active", "smartdns")
 		out, _ := cmd.Output()
 		active := strings.TrimSpace(string(out)) == "active"
-		return active, 0, nil
+		pid := 0
+		if active {
+			cmdPid := exec.Command("systemctl", "show", "--property", "MainPID", "--value", "smartdns")
+			if pOut, err := cmdPid.Output(); err == nil {
+				pid, _ = strconv.Atoi(strings.TrimSpace(string(pOut)))
+			}
+		} else {
+			// Fallback: check pgrep if running outside systemd
+			cmdPgrep := exec.Command("pgrep", "-x", "smartdns")
+			if pOut, err := cmdPgrep.Output(); err == nil {
+				pidStr := strings.TrimSpace(strings.Split(string(pOut), "\n")[0])
+				if p, err := strconv.Atoi(pidStr); err == nil && p > 0 {
+					return true, p, nil
+				}
+			}
+		}
+		return active, pid, nil
 	}
 
 	return false, 0, nil
 }
 
-// IsListening checks if port 53 is open on 127.0.0.1
+// IsListening checks if port 53 is open on 127.0.0.1 without external tools
 func IsListening() bool {
-	conn, err := exec.Command("nc", "-z", "-w", "1", "127.0.0.1", "53").CombinedOutput()
-	_ = conn
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:53", 250*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	c := new(dns.Client)
+	c.Timeout = 250 * time.Millisecond
+	m := new(dns.Msg)
+	m.SetQuestion(".", dns.TypeNS)
+	_, _, err = c.Exchange(m, "127.0.0.1:53")
 	return err == nil
 }
 
 // IsSystemDNSSet checks if 127.0.0.1 is configured as system DNS on active interface
 func IsSystemDNSSet(iface string) bool {
-	cmd := exec.Command("networksetup", "-getdnsservers", iface)
-	out, err := cmd.Output()
-	if err != nil {
-		return false
+	if runtime.GOOS == "darwin" {
+		cmd := exec.Command("networksetup", "-getdnsservers", iface)
+		out, err := cmd.Output()
+		if err != nil {
+			return false
+		}
+		return bytes.Contains(out, []byte("127.0.0.1"))
 	}
-	return bytes.Contains(out, []byte("127.0.0.1"))
+	if runtime.GOOS == "linux" {
+		return network.IsLinuxDNSSet(iface)
+	}
+	return false
 }
