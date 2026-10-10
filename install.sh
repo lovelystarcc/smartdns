@@ -53,6 +53,12 @@ else
 fi
 
 $SUDO chmod +x "$TARGET_BIN"
+
+# Apply ad-hoc signature on macOS (required for arm64 Apple Silicon)
+if [ "$OS" = "darwin" ] && command -v codesign >/dev/null 2>&1; then
+    $SUDO codesign -s - -f "$TARGET_BIN" >/dev/null 2>&1 || true
+fi
+
 echo "==> SmartDNS successfully installed to $TARGET_BIN"
 "$TARGET_BIN" version
 
