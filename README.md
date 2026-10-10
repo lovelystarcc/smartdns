@@ -16,7 +16,7 @@ Designed for instant switching of system DNS to a personal DoH / SNI proxy or pu
 Install the latest pre-built binary in a single command (no Go installation required):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh | bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh)"
 ```
 
 ---

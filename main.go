@@ -2,11 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -21,7 +24,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.2.1"
+const Version = "1.2.2"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -614,14 +617,80 @@ func handleDaemon() {
 }
 
 func handleUpdate() {
-	fmt.Printf("%s==> Updating SmartDNS to latest version from GitHub...%s\n", tester.Bold, tester.Reset)
-	cmd := exec.Command("bash", "-c", "curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh | bash")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("%sUpdate failed: %v%s\n", tester.Red, err, tester.Reset)
+	fmt.Printf("%s==> Checking and downloading latest SmartDNS release...%s\n", tester.Bold, tester.Reset)
+
+	binName := fmt.Sprintf("smartdns-%s-%s", runtime.GOOS, runtime.GOARCH)
+	downloadURL := fmt.Sprintf("https://github.com/lovelystarcc/smartdns/releases/latest/download/%s", binName)
+
+	resp, err := http.Get(downloadURL)
+	if err != nil {
+		fmt.Printf("%sFailed to fetch release: %v%s\n", tester.Red, err, tester.Reset)
 		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("%sFailed to download release: HTTP %d%s\n", tester.Red, resp.StatusCode, tester.Reset)
+		os.Exit(1)
+	}
+
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("smartdns_update_%d", os.Getpid()))
+	out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		fmt.Printf("%sFailed to create temp file: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		out.Close()
+		_ = os.Remove(tmpFile)
+		fmt.Printf("%sFailed to save update: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+	out.Close()
+
+	// On macOS Apple Silicon: apply ad-hoc codesign
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("codesign", "-s", "-", "-f", tmpFile).Run()
+	}
+
+	// Target binary path
+	execPath, err := os.Executable()
+	if err != nil {
+		execPath = "/usr/local/bin/smartdns"
+	}
+	execPath, _ = filepath.EvalSymlinks(execPath)
+
+	// Try atomic rename
+	err = os.Rename(tmpFile, execPath)
+	if err != nil {
+		// Try elevated move if permission denied
+		var moveErr error
+		if os.Geteuid() == 0 {
+			moveErr = exec.Command("mv", "-f", tmpFile, execPath).Run()
+		} else {
+			cmd := exec.Command("sudo", "mv", "-f", tmpFile, execPath)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			moveErr = cmd.Run()
+		}
+		if moveErr != nil {
+			_ = os.Remove(tmpFile)
+			fmt.Printf("%sFailed to replace binary at %s: %v%s\n", tester.Red, execPath, moveErr, tester.Reset)
+			os.Exit(1)
+		}
+	}
+	_ = os.Chmod(execPath, 0755)
+
+	fmt.Printf("%s✓ Updated successfully at %s%s\n", tester.Green, execPath, tester.Reset)
+
+	// Check if background service is running and restart it
+	running, _, _ := service.Status()
+	if running {
+		fmt.Printf("Restarting background daemon...\n")
+		_ = service.Restart()
+		fmt.Printf("%s✓ Service reloaded with the new version.%s\n", tester.Green, tester.Reset)
 	}
 }
 
