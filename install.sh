@@ -15,7 +15,7 @@ case "$ARCH" in
         ARCH="arm64"
         ;;
     *)
-        echo "Unsupported architecture: $ARCH"
+        echo "Error: Unsupported architecture: $ARCH"
         exit 1
         ;;
 esac
@@ -25,21 +25,36 @@ if [ "$OS" = "darwin" ] && [ -d "/opt/homebrew/bin" ] && [ -w "/opt/homebrew/bin
     TARGET_DIR="/opt/homebrew/bin"
 fi
 
-BIN_NAME="smartdns-${OS}-${ARCH}"
-
-# If building from source or installing prebuilt
-if [ -f "dist/${BIN_NAME}" ]; then
-    cp "dist/${BIN_NAME}" "${TARGET_DIR}/smartdns"
-elif command -v go >/dev/null 2>&1 && [ -f "main.go" ]; then
-    go build -ldflags="-s -w" -o "${TARGET_DIR}/smartdns" .
-else
-    echo "Installing smartdns to ${TARGET_DIR}/smartdns..."
-    # Placeholder for GitHub release download URL when uploaded to a repo
+SUDO=""
+if [ ! -w "$TARGET_DIR" ]; then
+    SUDO="sudo"
 fi
 
-chmod +x "${TARGET_DIR}/smartdns"
-echo "==> SmartDNS successfully installed to ${TARGET_DIR}/smartdns"
-smartdns version
+BIN_NAME="smartdns-${OS}-${ARCH}"
+TARGET_BIN="${TARGET_DIR}/smartdns"
+
+# If installing from local build or downloading prebuilt from GitHub
+if [ -f "dist/${BIN_NAME}" ]; then
+    $SUDO cp "dist/${BIN_NAME}" "$TARGET_BIN"
+elif command -v go >/dev/null 2>&1 && [ -f "main.go" ]; then
+    go build -ldflags="-s -w" -o /tmp/smartdns .
+    $SUDO mv -f /tmp/smartdns "$TARGET_BIN"
+else
+    echo "Downloading smartdns for ${OS}/${ARCH} from GitHub release..."
+    DOWNLOAD_URL="https://github.com/lovelystarcc/smartdns/releases/latest/download/${BIN_NAME}"
+    if command -v curl >/dev/null 2>&1; then
+        $SUDO curl -fsSL "$DOWNLOAD_URL" -o "$TARGET_BIN"
+    elif command -v wget >/dev/null 2>&1; then
+        $SUDO wget -qO "$TARGET_BIN" "$DOWNLOAD_URL"
+    else
+        echo "Error: curl or wget is required to download prebuilt binary."
+        exit 1
+    fi
+fi
+
+$SUDO chmod +x "$TARGET_BIN"
+echo "==> SmartDNS successfully installed to $TARGET_BIN"
+"$TARGET_BIN" version
 
 echo ""
 echo "Quick start:"

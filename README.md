@@ -1,12 +1,27 @@
 # SmartDNS CLI
 
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/github/v/release/lovelystarcc/smartdns?color=brightgreen)](https://github.com/lovelystarcc/smartdns/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)]()
+
 A lightweight, standalone **Go** utility for managing **SmartDNS / DNS-over-HTTPS (DoH)** on macOS and Linux.
 
-Designed for instant switching of system DNS to a personal DoH / SNI proxy or public resolvers, testing network latency, and verifying routing to geo-restricted or blocked services (such as Antigravity, ChatGPT, Claude, Gemini, Notion, Spotify, Canva, RuTracker).
+Designed for instant switching of system DNS to a personal DoH / SNI proxy or public resolvers, testing network latency, and verifying routing to geo-restricted or blocked services (such as Google Antigravity, ChatGPT, Claude, Gemini, Notion, Spotify, Canva, RuTracker).
 
 ---
 
-## 🚀 Quick Start on a New Machine
+## ⚡ Quick Install
+
+Install the latest pre-built binary in a single command (no Go installation required):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh | bash
+```
+
+---
+
+## 🚀 Quick Setup on a New Machine
 
 A single command configures your personal DNS on a new computer:
 
@@ -22,11 +37,10 @@ This command automatically:
 
 ---
 
-## 📦 Building and Distribution
+## 📦 Building from Source
 
 The tool compiles into a single static binary with zero external runtime dependencies:
 
-### Cross-compilation for all platforms:
 ```bash
 # macOS (Apple Silicon M1/M2/M3/M4)
 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-darwin-arm64 .
@@ -40,8 +54,6 @@ GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartdns-linux-amd64 .
 # Linux (ARM64 / Raspberry Pi)
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 ```
-
-Pre-built binaries are saved in the `dist/` directory.
 
 ---
 
@@ -97,3 +109,9 @@ The utility includes a built-in RFC 8484 DNS-over-HTTPS resolver with TTL cachin
 * `smartdns service restart` — Restart the daemon
 * `smartdns service uninstall` — Completely remove the daemon
 * `smartdns daemon` — Run DNS server in foreground (for debugging)
+
+---
+
+## 📄 License
+
+This project is open-sourced under the [MIT License](LICENSE).
