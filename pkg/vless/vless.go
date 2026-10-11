@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -137,30 +138,39 @@ func (d *Dialer) DialContext(ctx context.Context, network, target string) (net.C
 		return nil, fmt.Errorf("failed to send VLESS header: %w", err)
 	}
 
-	// Read VLESS response header (Version: 1 byte, Addons length: 1 byte)
-	respHdr := make([]byte, 2)
-	_ = tlsConn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	if _, err := io.ReadFull(tlsConn, respHdr); err != nil {
-		_ = tlsConn.Close()
-		return nil, fmt.Errorf("failed to read VLESS response header: %w", err)
-	}
-	_ = tlsConn.SetReadDeadline(time.Time{})
+	return &vlessConn{Conn: tlsConn}, nil
+}
 
-	if respHdr[0] != 0x00 {
-		_ = tlsConn.Close()
-		return nil, fmt.Errorf("unsupported VLESS response version: %d", respHdr[0])
-	}
+type vlessConn struct {
+	net.Conn
+	mu         sync.Mutex
+	headerRead bool
+}
 
-	addonLen := int(respHdr[1])
-	if addonLen > 0 {
-		addonBuf := make([]byte, addonLen)
-		if _, err := io.ReadFull(tlsConn, addonBuf); err != nil {
-			_ = tlsConn.Close()
-			return nil, fmt.Errorf("failed to read VLESS addon bytes: %w", err)
+func (c *vlessConn) Read(b []byte) (int, error) {
+	c.mu.Lock()
+	if !c.headerRead {
+		respHdr := make([]byte, 2)
+		if _, err := io.ReadFull(c.Conn, respHdr); err != nil {
+			c.mu.Unlock()
+			return 0, fmt.Errorf("failed to read VLESS response header: %w", err)
 		}
+		if respHdr[0] != 0x00 {
+			c.mu.Unlock()
+			return 0, fmt.Errorf("unsupported VLESS response version: %d", respHdr[0])
+		}
+		addonLen := int(respHdr[1])
+		if addonLen > 0 {
+			addonBuf := make([]byte, addonLen)
+			if _, err := io.ReadFull(c.Conn, addonBuf); err != nil {
+				c.mu.Unlock()
+				return 0, fmt.Errorf("failed to read VLESS addon bytes: %w", err)
+			}
+		}
+		c.headerRead = true
 	}
-
-	return tlsConn, nil
+	c.mu.Unlock()
+	return c.Conn.Read(b)
 }
 
 func parseUUID(uuidStr string) ([]byte, error) {
@@ -225,7 +235,6 @@ func realityHandshake(ctx context.Context, rawConn net.Conn, cfg *config.VLESSCo
 			return nil, fmt.Errorf("invalid reality public key base64: %w", err)
 		}
 	}
-
 	var shortIDBytes []byte
 	if cfg.ShortID != "" {
 		shortIDBytes, err = hex.DecodeString(cfg.ShortID)
@@ -245,10 +254,16 @@ func realityHandshake(ctx context.Context, rawConn net.Conn, cfg *config.VLESSCo
 	}
 
 	hello := uConn.HandshakeState.Hello
-	sessionID := make([]byte, 32)
-	binary.BigEndian.PutUint32(sessionID[4:], uint32(time.Now().Unix()))
+	hello.SessionId = make([]byte, 32)
+	copy(hello.Raw[39:], hello.SessionId) // КРИТИЧНО: зануляем AAD в сыром ClientHello
+
+	hello.SessionId[0] = 1
+	hello.SessionId[1] = 8
+	hello.SessionId[2] = 0
+	hello.SessionId[3] = 0
+	binary.BigEndian.PutUint32(hello.SessionId[4:], uint32(time.Now().Unix()))
 	if len(shortIDBytes) > 0 {
-		copy(sessionID[8:], shortIDBytes)
+		copy(hello.SessionId[8:], shortIDBytes)
 	}
 
 	publicKey, err := ecdh.X25519().NewPublicKey(pubKeyBytes)
@@ -257,6 +272,9 @@ func realityHandshake(ctx context.Context, rawConn net.Conn, cfg *config.VLESSCo
 	}
 
 	ecdhe := uConn.HandshakeState.State13.KeyShareKeys.Ecdhe
+	if ecdhe == nil {
+		ecdhe = uConn.HandshakeState.State13.KeyShareKeys.MlkemEcdhe
+	}
 	if ecdhe == nil {
 		return nil, fmt.Errorf("ecdhe keys not found in TLS 1.3 ClientHello")
 	}
@@ -281,14 +299,11 @@ func realityHandshake(ctx context.Context, rawConn net.Conn, cfg *config.VLESSCo
 		return nil, fmt.Errorf("reality GCM init failed: %w", err)
 	}
 
-	aead.Seal(sessionID[:0], hello.Random[20:], sessionID[:16], hello.Raw)
-	copy(hello.SessionId, sessionID)
-	copy(hello.Raw[39:], sessionID)
+	aead.Seal(hello.SessionId[:0], hello.Random[20:], hello.SessionId[:16], hello.Raw)
+	copy(hello.Raw[39:], hello.SessionId)
 
 	if err := uConn.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("reality TLS handshake failed with %s: %w", cfg.ServerName, err)
 	}
-
 	return uConn, nil
 }
-
