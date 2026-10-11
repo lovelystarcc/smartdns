@@ -17,16 +17,18 @@ import (
 
 	"smartdns/pkg/completion"
 	"smartdns/pkg/config"
+	"smartdns/pkg/fakeip"
 	"smartdns/pkg/network"
 	"smartdns/pkg/proxy"
 	"smartdns/pkg/resolver"
+	"smartdns/pkg/rules"
 	"smartdns/pkg/service"
 	"smartdns/pkg/tester"
 
 	"github.com/miekg/dns"
 )
 
-const Version = "1.6.0"
+const Version = "1.7.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -42,6 +44,10 @@ func printHelp() {
   %stest%s [domains...] Test latency, TLS ping, and routing to domains
   %supdate%s           Update SmartDNS to latest version from GitHub
   %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash, powershell)
+
+%sSPLIT DNS & FAKE-IP ENGINE:%s
+  %sfakeip%s [on|off|status|clear] Manage zero-latency Fake-IP engine (198.18.0.0/15)
+  %sbypass%s [add|remove|list]   Manage direct resolution whitelist (.ru, banks, gov)
 
 %sDEVELOPER TOOLS & PROXY BRIDGE:%s
   %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
@@ -65,8 +71,9 @@ func printHelp() {
 %sEXAMPLES:%s
   smartdns setup https://dns.example.com/dns-query personal
   smartdns on
+  smartdns fakeip on   # Enable 0ms Fake-IP mode
+  smartdns bypass add okko.tv
   smartdns run -- curl -I https://blocked-site.com
-  eval (smartdns env)  # (fish) enable proxy in current terminal session
   smartdns test
   smartdns off
 `,
@@ -78,6 +85,9 @@ func printHelp() {
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
+		tester.Cyan, tester.Reset,
+		tester.Cyan, tester.Reset,
+		tester.Bold, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
@@ -161,6 +171,12 @@ func main() {
 
 	case "update", "upgrade":
 		handleUpdate()
+
+	case "fakeip", "fake-ip":
+		handleFakeIP()
+
+	case "bypass", "split":
+		handleBypass()
 
 	case "completion":
 		handleCompletion()
@@ -321,7 +337,22 @@ func handleStatus() {
 		fmt.Printf(" Active profile                  : %sNot configured%s (run: smartdns setup <url>)\n", tester.Yellow, tester.Reset)
 	}
 
-	// 5. Auto-Fallback Protection
+	// 5. Split DNS Engine
+	bypassSummary := ".ru, .рф, .su, domestic services, LAN"
+	if active != nil && len(active.BypassDomains) > 0 {
+		bypassSummary += fmt.Sprintf(" (+%d custom)", len(active.BypassDomains))
+	}
+	fmt.Printf(" Split DNS Engine                : %s● Active%s (Direct bypass: %s)\n", tester.Green, tester.Reset, bypassSummary)
+
+	// 6. Fake-IP Engine
+	fakeIPStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartdns fakeip on')", tester.Yellow, tester.Reset)
+	if active != nil && active.FakeIP {
+		alloc, _ := fakeip.DefaultPool.Stats()
+		fakeIPStr = fmt.Sprintf("%s● Active%s (%d IPs allocated in 198.18.0.0/15)", tester.Green, tester.Reset, alloc)
+	}
+	fmt.Printf(" Fake-IP Engine (198.18.0.0/15)  : %s\n", fakeIPStr)
+
+	// 7. Auto-Fallback Protection
 	gw := network.GetPhysicalGateway()
 	fallbacks := []string{"1.1.1.1", "8.8.8.8", "77.88.8.8"}
 	if gw != "" {
@@ -329,7 +360,7 @@ func handleStatus() {
 	}
 	fmt.Printf(" Auto-Fallback Protection        : %s● Active%s (%s)\n", tester.Green, tester.Reset, strings.Join(fallbacks, ", "))
 
-	// 6. Public Egress IP
+	// 8. Public Egress IP
 	if pubIP, err := network.GetPublicIP(); err == nil && pubIP != nil {
 		fmt.Printf(" Public Egress IP                : %s● %s%s\n", tester.Cyan, pubIP.String(), tester.Reset)
 	}
@@ -1020,5 +1051,118 @@ Setup instructions:
 
 	fmt.Print(script)
 }
+
+func handleFakeIP() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("%sConfig error: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	active := cfg.GetActive()
+	if active == nil {
+		fmt.Printf("%sNo active profile configured%s\n", tester.Red, tester.Reset)
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 {
+		statusStr := fmt.Sprintf("%sDisabled%s", tester.Yellow, tester.Reset)
+		if active.FakeIP {
+			statusStr = fmt.Sprintf("%sEnabled%s", tester.Green, tester.Reset)
+		}
+		alloc, total := fakeip.DefaultPool.Stats()
+		fmt.Printf("\n%sFake-IP Engine (RFC 6598 - 198.18.0.0/15)%s\n", tester.Bold, tester.Reset)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf(" Active Profile     : %s%s%s\n", tester.Cyan, active.Name, tester.Reset)
+		fmt.Printf(" State              : %s\n", statusStr)
+		fmt.Printf(" Pool Allocated     : %d / %d addresses\n", alloc, total)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf("Usage:\n  smartdns fakeip on     - Enable Fake-IP mode (0ms instant DNS)\n  smartdns fakeip off    - Disable Fake-IP mode (standard DoH resolution)\n  smartdns fakeip clear  - Clear allocated Fake-IP cache\n\n")
+		return
+	}
+
+	action := strings.ToLower(os.Args[2])
+	switch action {
+	case "on", "enable":
+		active.FakeIP = true
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ Fake-IP mode enabled for profile '%s'. Daemon reloaded.%s\n", tester.Green, active.Name, tester.Reset)
+	case "off", "disable":
+		active.FakeIP = false
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ Fake-IP mode disabled for profile '%s'. Daemon reloaded.%s\n", tester.Yellow, active.Name, tester.Reset)
+	case "clear":
+		fakeip.DefaultPool.Clear()
+		fmt.Printf("%s✓ Fake-IP pool cleared.%s\n", tester.Green, tester.Reset)
+	case "status":
+		alloc, total := fakeip.DefaultPool.Stats()
+		fmt.Printf("Fake-IP: profile '%s', active: %v, allocated: %d / %d\n", active.Name, active.FakeIP, alloc, total)
+	default:
+		fmt.Printf("%sUnknown fakeip action: %s%s (use: on, off, status, clear)\n", tester.Red, action, tester.Reset)
+		os.Exit(1)
+	}
+}
+
+func handleBypass() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("%sConfig error: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	active := cfg.GetActive()
+	if active == nil {
+		fmt.Printf("%sNo active profile configured%s\n", tester.Red, tester.Reset)
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 || os.Args[2] == "list" {
+		fmt.Printf("\n%sSplit DNS Bypass Rules (Direct local resolution)%s\n", tester.Bold, tester.Reset)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf(" Default suffixes : %s\n", strings.Join(rules.DefaultBypassSuffixes, ", "))
+		fmt.Printf(" Default services : %s, ...\n", strings.Join(rules.DefaultDomesticServices[:8], ", "))
+		if len(active.BypassDomains) > 0 {
+			fmt.Printf(" Custom bypass    : %s%s%s\n", tester.Cyan, strings.Join(active.BypassDomains, ", "), tester.Reset)
+		} else {
+			fmt.Printf(" Custom bypass    : None (add using 'smartdns bypass add <domain>')\n")
+		}
+		if len(active.ProxyDomains) > 0 {
+			fmt.Printf(" Force proxy      : %s%s%s\n", tester.Yellow, strings.Join(active.ProxyDomains, ", "), tester.Reset)
+		}
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf("Usage:\n  smartdns bypass add <domain>     - Add domain/suffix to bypass\n  smartdns bypass remove <domain>  - Remove domain from bypass\n  smartdns bypass list             - Show current rules\n\n")
+		return
+	}
+
+	action := strings.ToLower(os.Args[2])
+	switch action {
+	case "add":
+		if len(os.Args) < 4 {
+			fmt.Printf("%sUsage: smartdns bypass add <domain>%s\n", tester.Yellow, tester.Reset)
+			os.Exit(1)
+		}
+		domain := os.Args[3]
+		_ = cfg.AddBypassDomain(active.Name, domain)
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ Added '%s' to bypass list for profile '%s'. Daemon reloaded.%s\n", tester.Green, domain, active.Name, tester.Reset)
+	case "remove", "rm", "delete":
+		if len(os.Args) < 4 {
+			fmt.Printf("%sUsage: smartdns bypass remove <domain>%s\n", tester.Yellow, tester.Reset)
+			os.Exit(1)
+		}
+		domain := os.Args[3]
+		_ = cfg.RemoveBypassDomain(active.Name, domain)
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ Removed '%s' from bypass list for profile '%s'. Daemon reloaded.%s\n", tester.Green, domain, active.Name, tester.Reset)
+	default:
+		fmt.Printf("%sUnknown bypass action: %s%s (use: add, remove, list)\n", tester.Red, action, tester.Reset)
+		os.Exit(1)
+	}
+}
+
 
 

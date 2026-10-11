@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"smartdns/pkg/config"
+	"smartdns/pkg/fakeip"
 
 	"golang.org/x/net/proxy"
 )
@@ -94,6 +95,16 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) dial(target string) (net.Conn, error) {
+	// If target is in Fake-IP format (e.g. 198.18.0.1:443), restore original domain
+	host, port, err := net.SplitHostPort(target)
+	if err == nil {
+		if ip := net.ParseIP(host); ip != nil && fakeip.DefaultPool.IsFakeIP(ip) {
+			if realDomain, found := fakeip.DefaultPool.LookupIP(ip); found {
+				target = net.JoinHostPort(realDomain, port)
+			}
+		}
+	}
+
 	active := s.cfg.GetActive()
 	if active != nil && active.ProxyUpstream != "" {
 		u, err := url.Parse(active.ProxyUpstream)

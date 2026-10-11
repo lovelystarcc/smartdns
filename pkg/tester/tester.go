@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"smartdns/pkg/fakeip"
 	"smartdns/pkg/network"
+	"smartdns/pkg/rules"
 
 	"github.com/miekg/dns"
 )
@@ -33,9 +35,9 @@ var DefaultDomains = []string{
 	"gemini.google.com",
 	"spotify.com",
 	"canva.com",
-	"linkedin.com",
-	"rutracker.org",
 	"notion.so",
+	"rutracker.org",
+	"yandex.ru",
 	"google.com",
 }
 
@@ -145,8 +147,12 @@ func Run(domains []string, vpsHost string) {
 
 		// Route format
 		routeStr := ""
-		if r.IsProxy {
+		if r.Resolved != "" && fakeip.DefaultPool.IsFakeIP(net.ParseIP(r.Resolved)) {
+			routeStr = fmt.Sprintf("%s⚡ Fake-IP%s %s(%s)%s", Cyan, Reset, Dim, r.Resolved, Reset)
+		} else if r.IsProxy {
 			routeStr = fmt.Sprintf("%s⚡ SmartDNS%s %s(%s)%s", Magenta, Reset, Dim, r.Resolved, Reset)
+		} else if rules.ShouldBypass(r.Domain, nil, nil) {
+			routeStr = fmt.Sprintf("%s⚡ Direct/Split%s %s(%s)%s", Green, Reset, Dim, r.Resolved, Reset)
 		} else if r.Resolved == "FAIL" || r.Resolved == "" {
 			routeStr = fmt.Sprintf("%sError%s", Red, Reset)
 		} else {

@@ -83,6 +83,24 @@ GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-windows-arm
 
 ---
 
+## ⚡ Split DNS & Fake-IP Engine
+
+SmartDNS v1.7.0 introduces intelligent Split DNS resolution and the Fake-IP engine (`198.18.0.0/15`), laying the architectural foundation for TUN-based network interception:
+
+| Command | Description |
+| :--- | :--- |
+| `smartdns fakeip [on\|off]` | Toggle 0ms instant Fake-IP mode (allocates IPs from `198.18.0.0/15`) |
+| `smartdns fakeip status` | Display pool usage and allocation statistics |
+| `smartdns fakeip clear` | Flush allocated Fake-IP cache |
+| `smartdns bypass list` | Show active domestic & custom direct bypass rules |
+| `smartdns bypass add <domain>` | Add custom domain or suffix to bypass list (direct resolution) |
+| `smartdns bypass remove <domain>` | Remove domain from bypass list |
+
+* **Zero-Latency Fake-IP**: Resolves target domains in 0 ms with instant virtual IP mapping. The proxy bridge seamlessly decodes Fake-IPs back to original hostnames upon connection.
+* **Domestic Split DNS**: Automatically routes `.ru`, `.рф`, `.su`, domestic banking/government services, and local LAN traffic through local fallback DNS, eliminating captchas and geo-restrictions on local websites.
+
+---
+
 ## 🛠 Developer Tools & Proxy Bridge
 
 SmartDNS includes a built-in local Mixed HTTP/SOCKS5 proxy bridge (`127.0.0.1:7890`) for seamless terminal and developer workflows:

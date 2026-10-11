@@ -2,11 +2,13 @@ package resolver
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
 	"smartdns/pkg/config"
+	"smartdns/pkg/fakeip"
 )
 
 func TestIsLocalOrCaptive(t *testing.T) {
@@ -151,4 +153,57 @@ func TestBackupUpstreamFailover(t *testing.T) {
 		t.Fatalf("expected non-empty response from backup DoH, got %v", resp)
 	}
 }
+
+type mockDNSWriter struct {
+	msg *dns.Msg
+}
+
+func (m *mockDNSWriter) LocalAddr() net.Addr       { return nil }
+func (m *mockDNSWriter) RemoteAddr() net.Addr      { return nil }
+func (m *mockDNSWriter) WriteMsg(msg *dns.Msg) error {
+	m.msg = msg
+	return nil
+}
+func (m *mockDNSWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (m *mockDNSWriter) Close() error               { return nil }
+func (m *mockDNSWriter) TsigStatus() error          { return nil }
+func (m *mockDNSWriter) TsigTimersOnly(bool)        {}
+func (m *mockDNSWriter) Hijack()                    {}
+
+func TestFakeIPResolution(t *testing.T) {
+	cfg := config.DefaultConfig()
+	_ = cfg.AddProfile(&config.Profile{
+		Name:     "fakeip-test",
+		Upstream: "https://1.1.1.1/dns-query",
+		FakeIP:   true,
+	})
+	_ = cfg.SetActive("fakeip-test")
+
+	s := New(cfg)
+
+	req := new(dns.Msg)
+	req.SetQuestion("chatgpt.com.", dns.TypeA)
+
+	w := &mockDNSWriter{}
+	s.handleDNS(w, req)
+
+	if w.msg == nil || len(w.msg.Answer) == 0 {
+		t.Fatal("expected Fake-IP answer in response")
+	}
+
+	aRecord, ok := w.msg.Answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("expected *dns.A record, got %T", w.msg.Answer[0])
+	}
+
+	if !fakeip.DefaultPool.IsFakeIP(aRecord.A) {
+		t.Fatalf("expected Fake-IP from 198.18.0.0/15, got %s", aRecord.A)
+	}
+
+	dom, ok := fakeip.DefaultPool.LookupIP(aRecord.A)
+	if !ok || dom != "chatgpt.com" {
+		t.Fatalf("expected reverse lookup chatgpt.com, got %s (ok=%v)", dom, ok)
+	}
+}
+
 

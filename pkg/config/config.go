@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -16,6 +17,9 @@ type Profile struct {
 	ProxyUpstream  string   `json:"proxy_upstream,omitempty"`
 	Bootstrap      []string `json:"bootstrap,omitempty"`
 	Desc           string   `json:"description,omitempty"`
+	BypassDomains  []string `json:"bypass_domains,omitempty"`
+	ProxyDomains   []string `json:"proxy_domains,omitempty"`
+	FakeIP         bool     `json:"fake_ip,omitempty"`
 }
 
 type Config struct {
@@ -172,5 +176,51 @@ func (c *Config) RemoveProfile(name string) error {
 			break
 		}
 	}
+	return nil
+}
+
+func (c *Config) SetFakeIP(name string, enabled bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	p.FakeIP = enabled
+	return nil
+}
+
+func (c *Config) AddBypassDomain(name, domain string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	d := strings.ToLower(strings.TrimSpace(domain))
+	for _, existing := range p.BypassDomains {
+		if strings.EqualFold(existing, d) {
+			return nil
+		}
+	}
+	p.BypassDomains = append(p.BypassDomains, d)
+	return nil
+}
+
+func (c *Config) RemoveBypassDomain(name, domain string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	d := strings.ToLower(strings.TrimSpace(domain))
+	var updated []string
+	for _, existing := range p.BypassDomains {
+		if !strings.EqualFold(existing, d) {
+			updated = append(updated, existing)
+		}
+	}
+	p.BypassDomains = updated
 	return nil
 }

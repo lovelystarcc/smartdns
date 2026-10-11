@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"smartdns/pkg/config"
+	"smartdns/pkg/fakeip"
+	"strings"
 
 	xproxy "golang.org/x/net/proxy"
 )
@@ -94,5 +96,47 @@ func TestProxyServerHTTPAndSOCKS5(t *testing.T) {
 
 	if string(socksBody) != "hello from target" {
 		t.Errorf("expected socks5 body 'hello from target', got %q", string(socksBody))
+	}
+}
+
+func TestProxyFakeIPTranslation(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("fakeip-ok"))
+	}))
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	targetHost, targetPort, _ := net.SplitHostPort(u.Host)
+
+	fakeIP := fakeip.DefaultPool.Allocate(targetHost)
+
+	port := getFreePort(t)
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	cfg := config.DefaultConfig()
+	cfg.ProxyAddr = proxyAddr
+
+	srv := New(cfg)
+	if err := srv.Start(); err != nil {
+		t.Fatalf("failed to start proxy server: %v", err)
+	}
+	defer srv.Stop()
+
+	time.Sleep(50 * time.Millisecond)
+
+	conn, err := srv.dial(net.JoinHostPort(fakeIP.String(), targetPort))
+	if err != nil {
+		t.Fatalf("dial via Fake-IP failed: %v", err)
+	}
+	defer conn.Close()
+
+	fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", targetHost)
+	respBytes, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if !strings.Contains(string(respBytes), "fakeip-ok") {
+		t.Errorf("expected response to contain 'fakeip-ok', got %s", string(respBytes))
 	}
 }

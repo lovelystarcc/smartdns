@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"smartdns/pkg/config"
+	"smartdns/pkg/fakeip"
 	"smartdns/pkg/network"
+	"smartdns/pkg/rules"
 
 	"github.com/miekg/dns"
 )
@@ -460,8 +462,17 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	q := r.Question[0]
 	cacheKey := fmt.Sprintf("%s:%d:%d", q.Name, q.Qtype, q.Qclass)
 
-	// 1. Direct local / captive portal bypass
-	if isLocalOrCaptive(q.Name) {
+	active := s.cfg.GetActive()
+	var customBypass, customProxy []string
+	fakeIPEnabled := false
+	if active != nil {
+		customBypass = active.BypassDomains
+		customProxy = active.ProxyDomains
+		fakeIPEnabled = active.FakeIP
+	}
+
+	// 1. Split DNS Check: domestic (.ru, banks, gov) & local intranet bypass
+	if rules.ShouldBypass(q.Name, customBypass, customProxy) {
 		resp, err := s.queryFallback(r)
 		if err == nil && resp != nil {
 			resp.Id = r.Id
@@ -470,7 +481,39 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// 2. Check cache
+	// 2. Fake-IP Handling for non-bypassed target domains
+	if fakeIPEnabled {
+		if q.Qtype == dns.TypeA {
+			fakeIP := fakeip.DefaultPool.Allocate(q.Name)
+			if fakeIP != nil {
+				m := new(dns.Msg)
+				m.SetReply(r)
+				m.Authoritative = true
+				m.Answer = []dns.RR{
+					&dns.A{
+						Hdr: dns.RR_Header{
+							Name:   q.Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    1,
+						},
+						A: fakeIP,
+					},
+				}
+				_ = w.WriteMsg(m)
+				return
+			}
+		} else if q.Qtype == dns.TypeAAAA {
+			// NODATA for AAAA in Fake-IP mode prevents IPv6 leaks
+			m := new(dns.Msg)
+			m.SetReply(r)
+			m.Authoritative = true
+			_ = w.WriteMsg(m)
+			return
+		}
+	}
+
+	// 3. Check cache
 	s.cacheMu.RLock()
 	item, found := s.cache[cacheKey]
 	s.cacheMu.RUnlock()
@@ -488,7 +531,6 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	currentState := s.state
 	s.stateMu.RUnlock()
 
-	active := s.cfg.GetActive()
 	var resp *dns.Msg
 	var err error
 	usedFallback := false

@@ -25,7 +25,7 @@ function __smartdns_domains
     echo "google.com"
 end
 
-set -l commands on off toggle status test list use add remove setup service daemon update completion run env proxy version help
+set -l commands on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass version help
 
 complete -c smartdns -f
 
@@ -47,6 +47,8 @@ complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a completio
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a run -d "Run command with proxy environment injected"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a env -d "Output proxy environment exports for shell"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a proxy -d "Manage local Mixed HTTP/SOCKS5 proxy bridge"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a fakeip -d "Manage zero-latency Fake-IP engine"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a bypass -d "Manage Split DNS direct resolution rules"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a version -d "Show version"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a help -d "Show help"
 
@@ -56,6 +58,8 @@ complete -c smartdns -n "__fish_seen_subcommand_from on" -a "(__smartdns_profile
 complete -c smartdns -n "__fish_seen_subcommand_from test" -a "(__smartdns_domains)" -d "Domain"
 complete -c smartdns -n "__fish_seen_subcommand_from service" -a "install uninstall start stop restart status"
 complete -c smartdns -n "__fish_seen_subcommand_from proxy" -a "status run set"
+complete -c smartdns -n "__fish_seen_subcommand_from fakeip" -a "on off status clear"
+complete -c smartdns -n "__fish_seen_subcommand_from bypass" -a "add remove list"
 complete -c smartdns -n "__fish_seen_subcommand_from env" -a "fish zsh bash powershell"
 complete -c smartdns -n "__fish_seen_subcommand_from completion" -a "fish zsh bash powershell"
 `
@@ -68,7 +72,7 @@ _smartdns_completions() {
     local cur prev commands
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="on off toggle status test list use add remove setup service daemon update completion run env proxy version help"
+    commands="on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass version help"
 
     case "$prev" in
         smartdns)
@@ -86,6 +90,14 @@ _smartdns_completions() {
             ;;
         proxy)
             COMPREPLY=($(compgen -W "status run set" -- "$cur"))
+            return 0
+            ;;
+        fakeip)
+            COMPREPLY=($(compgen -W "on off status clear" -- "$cur"))
+            return 0
+            ;;
+        bypass)
+            COMPREPLY=($(compgen -W "add remove list" -- "$cur"))
             return 0
             ;;
         env|completion)
@@ -126,6 +138,8 @@ _smartdns() {
         'run:Run command with proxy environment injected'
         'env:Output proxy environment exports for shell'
         'proxy:Manage local Mixed HTTP/SOCKS5 proxy bridge'
+        'fakeip:Manage zero-latency Fake-IP engine'
+        'bypass:Manage Split DNS direct resolution rules'
         'version:Show version'
         'help:Show help'
     )
@@ -149,6 +163,12 @@ _smartdns() {
                     ;;
                 proxy)
                     _values 'proxy commands' status run set
+                    ;;
+                fakeip)
+                    _values 'fakeip commands' on off status clear
+                    ;;
+                bypass)
+                    _values 'bypass commands' add remove list
                     ;;
                 env|completion)
                     _values 'shell' fish zsh bash powershell
@@ -193,6 +213,8 @@ Register-ArgumentCompleter -Native -CommandName smartdns -ScriptBlock {
             [System.Management.Automation.CompletionResult]::new('run', 'run', 'ParameterValue', 'Run command with proxy environment injected'),
             [System.Management.Automation.CompletionResult]::new('env', 'env', 'ParameterValue', 'Output proxy environment exports for shell'),
             [System.Management.Automation.CompletionResult]::new('proxy', 'proxy', 'ParameterValue', 'Manage local Mixed HTTP/SOCKS5 proxy bridge'),
+            [System.Management.Automation.CompletionResult]::new('fakeip', 'fakeip', 'ParameterValue', 'Manage zero-latency Fake-IP engine'),
+            [System.Management.Automation.CompletionResult]::new('bypass', 'bypass', 'ParameterValue', 'Manage Split DNS direct resolution rules'),
             [System.Management.Automation.CompletionResult]::new('version', 'version', 'ParameterValue', 'Show version'),
             [System.Management.Automation.CompletionResult]::new('help', 'help', 'ParameterValue', 'Show help')
         )
@@ -221,6 +243,18 @@ Register-ArgumentCompleter -Native -CommandName smartdns -ScriptBlock {
             $subs = @('status', 'run', 'set')
             $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Proxy command')
+            }
+        }
+        'fakeip' {
+            $subs = @('on', 'off', 'status', 'clear')
+            $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Fake-IP command')
+            }
+        }
+        'bypass' {
+            $subs = @('add', 'remove', 'list')
+            $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Bypass command')
             }
         }
         { $_ -in 'env', 'completion' } {
