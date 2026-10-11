@@ -39,12 +39,16 @@ func runElevated(name string, args ...string) ([]byte, error) {
 	if err == nil {
 		return out, nil
 	}
-	// If password is required, prompt interactively
-	cmd = exec.Command("sudo", append([]string{name}, args...)...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = nil
-	return nil, cmd.Run()
+	// Only prompt interactively if sudo reported password is required
+	outStr := string(out)
+	if strings.Contains(outStr, "password is required") || strings.Contains(outStr, "a password is required") {
+		cmd = exec.Command("sudo", append([]string{name}, args...)...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = nil
+		return nil, cmd.Run()
+	}
+	return out, err
 }
 
 func Install(binPath string) error {
@@ -55,9 +59,11 @@ func Install(binPath string) error {
 
 	if runtime.GOOS == "darwin" {
 		// Clean up legacy smartdns daemon first if present
-		_, _ = runElevated("launchctl", "bootout", "system/"+LegacyMacLabel)
-		_, _ = runElevated("launchctl", "unload", LegacyMacPlistPath)
-		_, _ = runElevated("rm", "-f", LegacyMacPlistPath)
+		if _, err := os.Stat(LegacyMacPlistPath); err == nil {
+			_, _ = runElevated("launchctl", "bootout", "system/"+LegacyMacLabel)
+			_, _ = runElevated("launchctl", "unload", LegacyMacPlistPath)
+			_, _ = runElevated("rm", "-f", LegacyMacPlistPath)
+		}
 
 		plistContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -164,9 +170,13 @@ func Start() error {
 		return nil
 	}
 	if runtime.GOOS == "darwin" {
-		// Try bootout first to clear stale state
-		_, _ = runElevated("launchctl", "bootout", "system/"+MacLabel)
-		_, _ = runElevated("launchctl", "unload", MacPlistPath)
+		if _, err := os.Stat(MacPlistPath); os.IsNotExist(err) {
+			return fmt.Errorf("launchd plist not found: %s", MacPlistPath)
+		}
+		// Try kickstart first in case it's already registered
+		if _, err := runElevated("launchctl", "kickstart", "-k", "system/"+MacLabel); err == nil {
+			return nil
+		}
 
 		out, err := runElevated("launchctl", "bootstrap", "system", MacPlistPath)
 		if err != nil {
@@ -201,8 +211,10 @@ func Stop() error {
 			_, _ = runElevated("launchctl", "bootout", "system/"+LegacyMacLabel)
 			_, _ = runElevated("launchctl", "unload", LegacyMacPlistPath)
 		}
-		_, _ = runElevated("launchctl", "bootout", "system/"+MacLabel)
-		_, _ = runElevated("launchctl", "unload", MacPlistPath)
+		if _, err := os.Stat(MacPlistPath); err == nil {
+			_, _ = runElevated("launchctl", "bootout", "system/"+MacLabel)
+			_, _ = runElevated("launchctl", "unload", MacPlistPath)
+		}
 		return nil
 	}
 	if runtime.GOOS == "linux" {
@@ -218,17 +230,21 @@ func Stop() error {
 
 func Restart() error {
 	if runtime.GOOS == "darwin" {
-		if _, err := os.Stat(MacPlistPath); os.IsNotExist(err) {
-			if _, errOld := os.Stat(LegacyMacPlistPath); os.IsNotExist(errOld) {
+		if _, err := os.Stat(MacPlistPath); err == nil {
+			if _, errKick := runElevated("launchctl", "kickstart", "-k", "system/"+MacLabel); errKick == nil {
 				return nil
 			}
+		} else if _, errOld := os.Stat(LegacyMacPlistPath); os.IsNotExist(errOld) {
+			return nil
 		}
 	}
 	if runtime.GOOS == "linux" {
-		if _, err := os.Stat(LinuxUnit); os.IsNotExist(err) {
-			if _, errOld := os.Stat(LegacyLinuxUnit); os.IsNotExist(errOld) {
+		if _, err := os.Stat(LinuxUnit); err == nil {
+			if _, errSys := runElevated("systemctl", "restart", "smartnet"); errSys == nil {
 				return nil
 			}
+		} else if _, errOld := os.Stat(LegacyLinuxUnit); os.IsNotExist(errOld) {
+			return nil
 		}
 	}
 	if runtime.GOOS == "windows" {

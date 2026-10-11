@@ -30,7 +30,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "2.0.2"
+const Version = "2.0.3"
 
 func printHelp() {
 	fmt.Printf(`%sSmartNet CLI v%s%s — DNS, VLESS-Reality VPN & Transparent TUN Proxy
