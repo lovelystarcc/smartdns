@@ -65,7 +65,7 @@ for cmd in smartnet smartdns
     complete -c $cmd -n "__fish_seen_subcommand_from fakeip" -a "on off status clear"
     complete -c $cmd -n "__fish_seen_subcommand_from bypass" -a "add remove list"
     complete -c $cmd -n "__fish_seen_subcommand_from tun" -a "on off status"
-    complete -c $cmd -n "__fish_seen_subcommand_from vpn" -a "on off status set"
+    complete -c $cmd -n "__fish_seen_subcommand_from vpn" -a "on off toggle status set"
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "on off toggle status"
     complete -c $cmd -n "__fish_seen_subcommand_from env" -a "fish zsh bash powershell"
     complete -c $cmd -n "__fish_seen_subcommand_from completion" -a "fish zsh bash powershell"
@@ -113,7 +113,7 @@ _smartnet_completions() {
             return 0
             ;;
         vpn)
-            COMPREPLY=($(compgen -W "on off status set" -- "$cur"))
+            COMPREPLY=($(compgen -W "on off toggle status set" -- "$cur"))
             return 0
             ;;
         dns)
@@ -197,7 +197,7 @@ _smartnet() {
                     _values 'tun commands' on off status
                     ;;
                 vpn)
-                    _values 'vpn commands' on off status set
+                    _values 'vpn commands' on off toggle status set
                     ;;
                 dns)
                     _values 'dns commands' on off toggle status
@@ -299,7 +299,7 @@ Register-ArgumentCompleter -Native -CommandName smartnet, smartdns -ScriptBlock 
             }
         }
         'vpn' {
-            $subs = @('on', 'off', 'status', 'set')
+            $subs = @('on', 'off', 'toggle', 'status', 'set')
             $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'VPN command')
             }

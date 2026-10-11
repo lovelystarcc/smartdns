@@ -62,21 +62,22 @@ smartnet on
 smartnet off
 ```
 
-### VLESS-Reality VPN Mode
-Anti-censorship tunnel using pure Go VLESS implementation with XTLS-RPRX-Vision and Reality TLS camouflage (SNI masking). Routes proxy bridge and transparent TUN traffic through the encrypted tunnel.
+### VLESS-Reality Global VPN Mode
+1-Click anti-censorship VPN combining VLESS-Reality tunnel, Virtual TUN adapter (tun2socks), and zero-latency Fake-IP engine. Routes all system applications transparently through the encrypted tunnel with SNI camouflage.
 ```bash
-smartnet vpn set "vless://<uuid>@<host>:443?encryption=none&security=reality&sni=gateway.icloud.com&pbk=<public_key>&sid=<short_id>&flow=xtls-rprx-vision"
-smartnet vpn on
-smartnet vpn status
-smartnet vpn off
+smartnet vpn set "vless://<uuid>@<host>:443?encryption=none&security=reality&sni=dl.google.com&pbk=<public_key>&sid=<short_id>"
+smartnet vpn on       # 1-Click: enables VLESS + TUN + Fake-IP + System DNS
+smartnet vpn status   # Inspect VPN, TUN, and server status
+smartnet vpn off      # Disables VPN & TUN (keeps SmartDNS intact)
+smartnet vpn toggle   # Quick toggle on/off
 ```
 
-### Virtual TUN Adapter Mode
-Transparent userspace TCP/IP stack (gVisor netstack + WireGuard TUN driver). Intercepts system traffic on the `198.18.0.0/15` subnet without modifying application proxy configurations.
+### Granular Adapter & Engine Controls
+For advanced setups, each subsystem can still be toggled independently:
 ```bash
-smartnet tun on
-smartnet tun status
-smartnet tun off
+smartnet vpn on --no-tun  # Route only mixed proxy bridge (127.0.0.1:7890) without TUN
+smartnet tun on           # Independent TUN adapter control
+smartnet fakeip on        # Independent Fake-IP engine control
 ```
 
 ---
@@ -86,8 +87,8 @@ smartnet tun off
 ### Core
 | Command | Description |
 | :--- | :--- |
-| `smartnet on [profile]` | Enable DNS on active network interface (`127.0.0.1`) |
-| `smartnet off` | Restore network interface DNS to DHCP |
+| `smartnet on [profile] [--vpn]` | Enable DNS on active network interface (optional 1-click VPN) |
+| `smartnet off` | Restore network interface DNS to DHCP and stop any active VPN/TUN |
 | `smartnet toggle` | Toggle DNS state |
 | `smartnet status` | Show full subsystem status (DNS, VPN, TUN, egress IP) |
 | `smartnet test [domains...]` | Test DNS resolution, TLS ping, and route destination |
@@ -97,16 +98,18 @@ smartnet tun off
 ### VPN (VLESS-Reality)
 | Command | Description |
 | :--- | :--- |
+| `smartnet vpn on` | **1-Click Global VPN**: activates VLESS, TUN adapter, Fake-IP & DNS |
+| `smartnet vpn off` | Disable VPN and TUN adapter (reverts to SmartDNS) |
+| `smartnet vpn toggle` | Toggle Global VPN state |
+| `smartnet vpn on --no-tun` | Enable VLESS for local proxy bridge only (`127.0.0.1:7890`) |
 | `smartnet vpn set <vless://...>` | Store VLESS-Reality connection string for active profile |
-| `smartnet vpn on` | Enable VLESS-Reality tunnel |
-| `smartnet vpn off` | Disable VLESS-Reality tunnel |
 | `smartnet vpn status` | Show tunnel status and server parameters |
 
-### Transparent TUN & Split DNS
+### Advanced Controls (TUN & Split DNS)
 | Command | Description |
 | :--- | :--- |
-| `smartnet tun [on\|off\|status]` | Manage virtual TUN interface and subnet routing |
-| `smartnet fakeip [on\|off\|clear]` | Manage zero-latency Fake-IP allocation (`198.18.0.0/15`) |
+| `smartnet tun [on\|off\|status]` | Granular control of virtual TUN interface and netstack |
+| `smartnet fakeip [on\|off\|clear]` | Granular control of Fake-IP allocation (`198.18.0.0/15`) |
 | `smartnet bypass list` | List domains routed directly via local resolver |
 | `smartnet bypass add <domain>` | Add domain to direct bypass list |
 | `smartnet bypass remove <domain>` | Remove domain from direct bypass list |
