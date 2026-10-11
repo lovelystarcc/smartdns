@@ -367,6 +367,22 @@ func EnsureRouteBypass(upstreamURL string) error {
 	return nil
 }
 
+// FlushDNSCache flushes local OS DNS cache to immediately purge stale mappings
+func FlushDNSCache() {
+	if runtime.GOOS == "darwin" {
+		_ = exec.Command("dscacheutil", "-flushcache").Run()
+		_, _ = runElevatedCommand("killall", "-HUP", "mDNSResponder")
+	} else if runtime.GOOS == "linux" {
+		if _, err := exec.LookPath("resolvectl"); err == nil {
+			_ = exec.Command("resolvectl", "flush-caches").Run()
+		} else if _, err := exec.LookPath("systemd-resolve"); err == nil {
+			_ = exec.Command("systemd-resolve", "--flush-caches").Run()
+		}
+	} else if runtime.GOOS == "windows" {
+		_ = exec.Command("ipconfig", "/flushdns").Run()
+	}
+}
+
 // GetPhysicalGateway returns the default gateway IP for physical interfaces (e.g. 172.20.10.1)
 func GetPhysicalGateway() string {
 	if runtime.GOOS == "darwin" {

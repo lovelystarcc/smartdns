@@ -30,7 +30,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "2.0.4"
+const Version = "2.0.5"
 
 func printHelp() {
 	fmt.Printf(`%sSmartNet CLI v%s%s — DNS, VLESS-Reality VPN & Transparent TUN Proxy
@@ -292,17 +292,20 @@ func handleOff() {
 		os.Exit(1)
 	}
 
-	// Also disable TUN and VPN if active so traffic does not get lost
+	// Also disable TUN, Fake-IP and VPN if active so traffic does not get lost
 	cfg, err := config.Load()
 	if err == nil {
 		active := cfg.GetActive()
-		if active != nil && (active.VPN || active.TUN) {
+		if active != nil && (active.VPN || active.TUN || active.FakeIP) {
 			active.VPN = false
 			active.TUN = false
+			active.FakeIP = false
+			fakeip.DefaultPool.Clear()
 			_ = cfg.Save()
 			_ = service.Restart()
 		}
 	}
+	network.FlushDNSCache()
 
 	fmt.Printf("%sDNS disabled (DHCP)%s on interface %s%s%s\n",
 		tester.Dim, tester.Reset,
@@ -1213,12 +1216,15 @@ func handleFakeIP() {
 		fmt.Printf("%s✓ Fake-IP mode enabled for profile '%s'. Daemon reloaded.%s\n", tester.Green, active.Name, tester.Reset)
 	case "off", "disable":
 		active.FakeIP = false
+		fakeip.DefaultPool.Clear()
 		_ = cfg.Save()
 		_ = service.Restart()
-		fmt.Printf("%s✓ Fake-IP mode disabled for profile '%s'. Daemon reloaded.%s\n", tester.Yellow, active.Name, tester.Reset)
+		network.FlushDNSCache()
+		fmt.Printf("%s✓ Fake-IP mode disabled for profile '%s'. Daemon reloaded & DNS cache flushed.%s\n", tester.Yellow, active.Name, tester.Reset)
 	case "clear":
 		fakeip.DefaultPool.Clear()
-		fmt.Printf("%s✓ Fake-IP pool cleared.%s\n", tester.Green, tester.Reset)
+		network.FlushDNSCache()
+		fmt.Printf("%s✓ Fake-IP pool cleared & DNS cache flushed.%s\n", tester.Green, tester.Reset)
 	case "status":
 		alloc, total := fakeip.DefaultPool.Stats()
 		fmt.Printf("Fake-IP: profile '%s', active: %v, allocated: %d / %d\n", active.Name, active.FakeIP, alloc, total)
@@ -1326,9 +1332,12 @@ func handleTUN() {
 		fmt.Println("  All system applications now route through SmartNet transparently without proxy settings.")
 	case "off", "disable":
 		active.TUN = false
+		active.FakeIP = false
+		fakeip.DefaultPool.Clear()
 		_ = cfg.Save()
 		_ = service.Restart()
-		fmt.Printf("%s✓ TUN mode disabled for profile '%s'. Daemon reloaded.%s\n", tester.Yellow, active.Name, tester.Reset)
+		network.FlushDNSCache()
+		fmt.Printf("%s✓ TUN mode disabled for profile '%s'. Fake-IP cleared & daemon reloaded.%s\n", tester.Yellow, active.Name, tester.Reset)
 	case "status":
 		statusStr := "disabled"
 		if active.TUN {
@@ -1482,12 +1491,16 @@ func handleVPN() {
 		active.VPN = false
 		tunWasActive := active.TUN
 		active.TUN = false
+		active.FakeIP = false
+		fakeip.DefaultPool.Clear()
 		_ = cfg.Save()
 		_ = service.Restart()
+		network.FlushDNSCache()
 		fmt.Printf("%s✓ VLESS-Reality VPN disabled for profile '%s'.%s\n", tester.Yellow, active.Name, tester.Reset)
 		if tunWasActive {
 			fmt.Printf("  • TUN transparent proxy adapter disabled.\n")
 		}
+		fmt.Printf("  • Fake-IP disabled, pool cleared & DNS cache flushed.\n")
 		fmt.Printf("  • System DNS remains active for SmartDNS. (Run 'smartnet off' to disable DNS completely)\n")
 
 	case "toggle":
@@ -1495,12 +1508,16 @@ func handleVPN() {
 			active.VPN = false
 			tunWasActive := active.TUN
 			active.TUN = false
+			active.FakeIP = false
+			fakeip.DefaultPool.Clear()
 			_ = cfg.Save()
 			_ = service.Restart()
+			network.FlushDNSCache()
 			fmt.Printf("%s✓ VLESS-Reality VPN disabled for profile '%s'.%s\n", tester.Yellow, active.Name, tester.Reset)
 			if tunWasActive {
 				fmt.Printf("  • TUN transparent proxy adapter disabled.\n")
 			}
+			fmt.Printf("  • Fake-IP disabled, pool cleared & DNS cache flushed.\n")
 		} else {
 			if active.VLESS == nil {
 				fmt.Printf("%s⚠️ No VLESS configuration found for profile '%s'.%s\nConfigure it first:\n  smartnet vpn set vless://...\n", tester.Yellow, active.Name, tester.Reset)
