@@ -6,7 +6,7 @@ import (
 )
 
 func TestGenerate(t *testing.T) {
-	shells := []string{"fish", "bash", "zsh"}
+	shells := []string{"fish", "bash", "zsh", "powershell", "pwsh"}
 
 	for _, sh := range shells {
 		script, err := Generate(sh)

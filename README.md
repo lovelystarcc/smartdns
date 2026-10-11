@@ -3,9 +3,9 @@
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/lovelystarcc/smartdns?color=brightgreen)](https://github.com/lovelystarcc/smartdns/releases/latest)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
-A lightweight, standalone **Go** utility for managing **SmartDNS / DNS-over-HTTPS (DoH)** on macOS and Linux.
+A lightweight, standalone **Go** utility for managing **SmartDNS / DNS-over-HTTPS (DoH)** on macOS, Linux, and Windows.
 
 Designed for instant switching of system DNS to a personal DoH / SNI proxy or public resolvers, testing network latency, and verifying routing to geo-restricted or blocked services (such as Google Antigravity, ChatGPT, Claude, Gemini, Notion, Spotify, Canva, RuTracker).
 
@@ -19,6 +19,8 @@ Install the latest pre-built binary in a single command (no Go installation requ
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartdns/main/install.sh)"
 ```
 
+On Windows, download the latest `smartdns-windows-amd64.exe` from [GitHub Releases](https://github.com/lovelystarcc/smartdns/releases/latest) and place it in your `PATH`.
+
 ---
 
 ## 🚀 Quick Setup on a New Machine
@@ -26,12 +28,16 @@ Install the latest pre-built binary in a single command (no Go installation requ
 A single command configures your personal DNS on a new computer:
 
 ```bash
+# macOS / Linux:
 sudo smartdns setup https://dns.example.com/dns-query personal
+
+# Windows (Run PowerShell / CMD as Administrator):
+smartdns setup https://dns.example.com/dns-query personal
 ```
 
 This command automatically:
 1. Creates a `personal` profile with your upstream DoH server.
-2. Installs and starts the background resolver daemon (`launchd` on macOS or `systemd` on Linux).
+2. Installs and starts the background resolver daemon (`launchd` on macOS, `systemd` on Linux, Task Scheduler on Windows).
 3. Activates DNS `127.0.0.1` on the active network interface (`Wi-Fi` / `Ethernet`).
 4. Verifies connectivity and displays the current status.
 
@@ -53,6 +59,12 @@ GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartdns-linux-amd64 .
 
 # Linux (ARM64 / Raspberry Pi)
 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
+
+# Windows (x64)
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartdns-windows-amd64.exe .
+
+# Windows (ARM64)
+GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-windows-arm64.exe .
 ```
 
 ---
@@ -67,7 +79,7 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 | `smartdns status` | Show detailed status of service, active interface, egress IP, and DNS |
 | `smartdns test [domains...]` | Test DNS resolution speed, TLS ping, HTTP status codes, and egress IP |
 | `smartdns update` | Update SmartDNS to the latest release from GitHub |
-| `smartdns completion <shell>` | Generate shell completion script (`fish`, `zsh`, `bash`) |
+| `smartdns completion <shell>` | Generate shell completion script (`fish`, `zsh`, `bash`, `powershell`) |
 
 ---
 
@@ -78,7 +90,7 @@ SmartDNS includes a built-in local Mixed HTTP/SOCKS5 proxy bridge (`127.0.0.1:78
 | Command | Description |
 | :--- | :--- |
 | `smartdns run [--] <cmd...>` | Execute any CLI command with proxy environment injected (`curl`, `git`, `brew`) |
-| `smartdns env [fish\|zsh]` | Output shell export commands (`HTTP_PROXY`, `ALL_PROXY`) for current session |
+| `smartdns env [fish\|zsh\|powershell]` | Output shell export commands (`HTTP_PROXY`, `ALL_PROXY`) for current session |
 | `smartdns env -u` | Output unset commands to clear proxy environment in current session |
 | `smartdns proxy status` | Show status of the local Mixed HTTP/SOCKS5 listener |
 | `smartdns proxy run` | Run standalone proxy bridge in foreground (for debugging) |
@@ -95,6 +107,12 @@ eval (smartdns env)
 
 # Enable proxy in current Zsh / Bash session:
 eval $(smartdns env zsh)
+
+# Enable proxy in PowerShell (Windows / Cross-platform):
+smartdns env powershell | Out-String | Invoke-Expression
+
+# Clear proxy in PowerShell session:
+smartdns env -u powershell | Out-String | Invoke-Expression
 ```
 
 ---

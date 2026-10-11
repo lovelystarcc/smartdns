@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -38,6 +39,19 @@ func DefaultConfig() *Config {
 func GetConfigPath() string {
 	if custom := os.Getenv("SMARTDNS_CONFIG"); custom != "" {
 		return custom
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "smartdns", "config.json")
+		}
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			return filepath.Join(programData, "smartdns", "config.json")
+		}
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, ".smartdns", "config.json")
+		}
+		return `C:\ProgramData\smartdns\config.json`
 	}
 	if os.Geteuid() == 0 {
 		return "/etc/smartdns/config.json"

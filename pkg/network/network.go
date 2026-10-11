@@ -15,7 +15,7 @@ import (
 const ResolvConfBackup = "/etc/resolv.conf.smartdns.bak"
 
 func runElevatedCommand(name string, args ...string) ([]byte, error) {
-	if os.Geteuid() == 0 {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		cmd := exec.Command(name, args...)
 		return cmd.CombinedOutput()
 	}
@@ -33,13 +33,16 @@ func runElevatedCommand(name string, args ...string) ([]byte, error) {
 	return nil, cmd.Run()
 }
 
-// ActiveInterface detects physical network service name (e.g. "Wi-Fi" / "Ethernet" on macOS, "eth0" / "wlan0" on Linux)
+// ActiveInterface detects physical network service name (e.g. "Wi-Fi" / "Ethernet" on macOS/Windows, "eth0" / "wlan0" on Linux)
 func ActiveInterface() (string, error) {
 	if runtime.GOOS == "darwin" {
 		return macActiveInterface()
 	}
 	if runtime.GOOS == "linux" {
 		return linuxActiveInterface()
+	}
+	if runtime.GOOS == "windows" {
+		return windowsActiveInterface()
 	}
 	return "eth0", nil
 }
@@ -162,6 +165,10 @@ func GetDNSServers(iface string) ([]string, error) {
 		return linuxGetDNSServers(iface)
 	}
 
+	if runtime.GOOS == "windows" {
+		return windowsGetDNSServers(iface)
+	}
+
 	return []string{"DHCP (Default)"}, nil
 }
 
@@ -214,6 +221,10 @@ func SetDNSServers(iface string, servers ...string) error {
 		return linuxSetDNSServers(iface, servers...)
 	}
 
+	if runtime.GOOS == "windows" {
+		return windowsSetDNSServers(iface, servers...)
+	}
+
 	return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 }
 
@@ -258,6 +269,10 @@ func ResetDNSServers(iface string) error {
 
 	if runtime.GOOS == "linux" {
 		return linuxResetDNSServers(iface)
+	}
+
+	if runtime.GOOS == "windows" {
+		return windowsResetDNSServers(iface)
 	}
 
 	return nil
@@ -341,6 +356,8 @@ func ClearStaleRoutes(upstreamURL string) {
 		}
 	} else if runtime.GOOS == "linux" {
 		_, _ = runElevatedCommand("ip", "route", "del", ipStr)
+	} else if runtime.GOOS == "windows" {
+		_ = exec.Command("route", "delete", ipStr).Run()
 	}
 }
 
@@ -357,6 +374,9 @@ func GetPhysicalGateway() string {
 	}
 	if runtime.GOOS == "linux" {
 		return linuxGetPhysicalGateway()
+	}
+	if runtime.GOOS == "windows" {
+		return windowsGetPhysicalGateway()
 	}
 	return ""
 }
@@ -407,3 +427,157 @@ func linuxGetPhysicalGateway() string {
 	}
 	return ""
 }
+
+func windowsActiveInterface() (string, error) {
+	// 1. Query interface with default IPv4 route via PowerShell
+	psCmd := "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -ExpandProperty InterfaceAlias -First 1)"
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	if out, err := cmd.Output(); err == nil {
+		alias := strings.TrimSpace(string(out))
+		if alias != "" {
+			return alias, nil
+		}
+	}
+
+	// 2. Fallback: inspect net.Interfaces()
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, ifa := range ifaces {
+			if ifa.Flags&net.FlagUp != 0 && ifa.Flags&net.FlagLoopback == 0 {
+				lower := strings.ToLower(ifa.Name)
+				if !strings.Contains(lower, "pseudo") && !strings.Contains(lower, "teredo") && !strings.Contains(lower, "isatap") {
+					return ifa.Name, nil
+				}
+			}
+		}
+	}
+
+	return "Wi-Fi", nil
+}
+
+func windowsGetDNSServers(iface string) ([]string, error) {
+	// 1. Try netsh interface ip show dns
+	cmd := exec.Command("netsh", "interface", "ip", "show", "dns", "name="+iface)
+	out, err := cmd.Output()
+	if err == nil {
+		var servers []string
+		lines := strings.Split(string(out), "\n")
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			if ip := net.ParseIP(l); ip != nil {
+				servers = append(servers, ip.String())
+				continue
+			}
+			if strings.Contains(l, ":") {
+				parts := strings.SplitN(l, ":", 2)
+				cand := strings.TrimSpace(parts[1])
+				if ip := net.ParseIP(cand); ip != nil {
+					servers = append(servers, ip.String())
+				}
+			}
+		}
+		if len(servers) > 0 {
+			return servers, nil
+		}
+	}
+
+	// 2. Try PowerShell Get-DnsClientServerAddress
+	psCmd := fmt.Sprintf("(Get-DnsClientServerAddress -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses", iface)
+	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	if outPS, errPS := cmdPS.Output(); errPS == nil {
+		var servers []string
+		lines := strings.Split(strings.TrimSpace(string(outPS)), "\n")
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			if ip := net.ParseIP(l); ip != nil {
+				servers = append(servers, ip.String())
+			}
+		}
+		if len(servers) > 0 {
+			return servers, nil
+		}
+	}
+
+	return []string{"DHCP (Default)"}, nil
+}
+
+func windowsSetDNSServers(iface string, servers ...string) error {
+	dnsTarget := "127.0.0.1"
+	if len(servers) > 0 && servers[0] != "empty" {
+		dnsTarget = servers[0]
+	}
+	if len(servers) > 0 && servers[0] == "empty" {
+		return windowsResetDNSServers(iface)
+	}
+
+	// 1. Try netsh
+	cmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name="+iface, "static", dnsTarget)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+
+	// 2. Fallback to PowerShell Set-DnsClientServerAddress
+	psCmd := fmt.Sprintf("Set-DnsClientServerAddress -InterfaceAlias '%s' -ServerAddresses ('%s')", iface, dnsTarget)
+	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	if outPS, errPS := cmdPS.CombinedOutput(); errPS != nil {
+		return fmt.Errorf("failed to set DNS (netsh: %s, ps: %s)", string(out), string(outPS))
+	}
+	return nil
+}
+
+func windowsResetDNSServers(iface string) error {
+	// 1. Try netsh
+	cmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name="+iface, "dhcp")
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+
+	// 2. Fallback to PowerShell
+	psCmd := fmt.Sprintf("Set-DnsClientServerAddress -InterfaceAlias '%s' -ResetServerAddresses", iface)
+	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	return cmdPS.Run()
+}
+
+// IsWindowsDNSSet checks if 127.0.0.1 is configured as DNS on the interface
+func IsWindowsDNSSet(iface string) bool {
+	servers, err := windowsGetDNSServers(iface)
+	if err != nil {
+		return false
+	}
+	for _, s := range servers {
+		if strings.Contains(s, "127.0.0.1") {
+			return true
+		}
+	}
+	return false
+}
+
+func windowsGetPhysicalGateway() string {
+	// 1. Try PowerShell NextHop for default route
+	psCmd := "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NextHop -First 1)"
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	if out, err := cmd.Output(); err == nil {
+		hop := strings.TrimSpace(string(out))
+		if ip := net.ParseIP(hop); ip != nil && !ip.IsUnspecified() {
+			return hop
+		}
+	}
+
+	// 2. Fallback: parse route print
+	cmdRoute := exec.Command("route", "print", "0.0.0.0")
+	if out, err := cmdRoute.Output(); err == nil {
+		lines := strings.Split(string(out), "\n")
+		for _, l := range lines {
+			fields := strings.Fields(l)
+			if len(fields) >= 5 && fields[0] == "0.0.0.0" && fields[1] == "0.0.0.0" {
+				cand := fields[2]
+				if ip := net.ParseIP(cand); ip != nil && !ip.IsUnspecified() {
+					return cand
+				}
+			}
+		}
+	}
+	return ""
+}
+

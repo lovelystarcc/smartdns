@@ -26,7 +26,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.5.0"
+const Version = "1.6.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -41,11 +41,11 @@ func printHelp() {
   %sstatus%s           Show service, network interface, egress IP, and DNS status
   %stest%s [domains...] Test latency, TLS ping, and routing to domains
   %supdate%s           Update SmartDNS to latest version from GitHub
-  %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash)
+  %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash, powershell)
 
 %sDEVELOPER TOOLS & PROXY BRIDGE:%s
   %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
-  %senv%s [fish|zsh]   Output shell export commands for proxy (use with eval)
+  %senv%s [sh]         Output shell export commands for proxy (use with eval or iex)
   %sproxy%s status|run Manage local Mixed HTTP/SOCKS5 proxy bridge (127.0.0.1:7890)
 
 %sPROFILE MANAGEMENT:%s
@@ -58,7 +58,7 @@ func printHelp() {
   %ssetup%s <url> [name] Configure everything in one command (service + profile + network)
 
 %sSYSTEM DAEMON:%s
-  %sservice%s install  Install background service into startup (launchd / systemd)
+  %sservice%s install  Install background service into startup (launchd / systemd / schtasks)
   %sservice%s start|stop|restart|status|uninstall
   %sdaemon%s           Run DNS server and proxy bridge in console (foreground)
 
@@ -773,17 +773,23 @@ func handleEnv() {
 	}
 
 	if sh == "" {
-		shellEnv := os.Getenv("SHELL")
-		if strings.Contains(shellEnv, "fish") {
-			sh = "fish"
+		if runtime.GOOS == "windows" {
+			sh = "powershell"
 		} else {
-			sh = "zsh"
+			shellEnv := os.Getenv("SHELL")
+			if strings.Contains(shellEnv, "fish") {
+				sh = "fish"
+			} else {
+				sh = "zsh"
+			}
 		}
 	}
 
 	if isUnset {
 		if sh == "fish" {
 			fmt.Println("set -e HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy")
+		} else if sh == "powershell" || sh == "pwsh" {
+			fmt.Println("Remove-Item env:HTTP_PROXY, env:HTTPS_PROXY, env:ALL_PROXY, env:http_proxy, env:https_proxy, env:all_proxy -ErrorAction SilentlyContinue")
 		} else {
 			fmt.Println("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy")
 		}
@@ -797,6 +803,13 @@ func handleEnv() {
 		fmt.Printf("set -gx http_proxy %s\n", httpURL)
 		fmt.Printf("set -gx https_proxy %s\n", httpURL)
 		fmt.Printf("set -gx all_proxy %s\n", socksURL)
+	} else if sh == "powershell" || sh == "pwsh" {
+		fmt.Printf("$env:HTTP_PROXY = \"%s\"\n", httpURL)
+		fmt.Printf("$env:HTTPS_PROXY = \"%s\"\n", httpURL)
+		fmt.Printf("$env:ALL_PROXY = \"%s\"\n", socksURL)
+		fmt.Printf("$env:http_proxy = \"%s\"\n", httpURL)
+		fmt.Printf("$env:https_proxy = \"%s\"\n", httpURL)
+		fmt.Printf("$env:all_proxy = \"%s\"\n", socksURL)
 	} else {
 		fmt.Printf("export HTTP_PROXY=\"%s\"\n", httpURL)
 		fmt.Printf("export HTTPS_PROXY=\"%s\"\n", httpURL)
@@ -875,6 +888,9 @@ func handleUpdate() {
 	fmt.Printf("%s==> Checking and downloading latest SmartDNS release...%s\n", tester.Bold, tester.Reset)
 
 	binName := fmt.Sprintf("smartdns-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
 	downloadURL := fmt.Sprintf("https://github.com/lovelystarcc/smartdns/releases/latest/download/%s", binName)
 
 	resp, err := http.Get(downloadURL)
@@ -890,6 +906,9 @@ func handleUpdate() {
 	}
 
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("smartdns_update_%d", os.Getpid()))
+	if runtime.GOOS == "windows" {
+		tmpFile += ".exe"
+	}
 	out, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		fmt.Printf("%sFailed to create temp file: %v%s\n", tester.Red, err, tester.Reset)
@@ -912,31 +931,51 @@ func handleUpdate() {
 	// Target binary path
 	execPath, err := os.Executable()
 	if err != nil {
-		execPath = "/usr/local/bin/smartdns"
+		if runtime.GOOS == "windows" {
+			execPath = "smartdns.exe"
+		} else {
+			execPath = "/usr/local/bin/smartdns"
+		}
 	}
 	execPath, _ = filepath.EvalSymlinks(execPath)
 
-	// Try atomic rename
-	err = os.Rename(tmpFile, execPath)
-	if err != nil {
-		// Try elevated move if permission denied
-		var moveErr error
-		if os.Geteuid() == 0 {
-			moveErr = exec.Command("mv", "-f", tmpFile, execPath).Run()
-		} else {
-			cmd := exec.Command("sudo", "mv", "-f", tmpFile, execPath)
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			moveErr = cmd.Run()
-		}
-		if moveErr != nil {
+	if runtime.GOOS == "windows" {
+		oldPath := execPath + ".old"
+		_ = os.Remove(oldPath)
+		if err := os.Rename(execPath, oldPath); err != nil {
 			_ = os.Remove(tmpFile)
-			fmt.Printf("%sFailed to replace binary at %s: %v%s\n", tester.Red, execPath, moveErr, tester.Reset)
+			fmt.Printf("%sFailed to rename active executable: %v%s\n", tester.Red, err, tester.Reset)
 			os.Exit(1)
 		}
+		if err := os.Rename(tmpFile, execPath); err != nil {
+			_ = os.Rename(oldPath, execPath)
+			_ = os.Remove(tmpFile)
+			fmt.Printf("%sFailed to install new executable: %v%s\n", tester.Red, err, tester.Reset)
+			os.Exit(1)
+		}
+	} else {
+		// Try atomic rename
+		err = os.Rename(tmpFile, execPath)
+		if err != nil {
+			// Try elevated move if permission denied
+			var moveErr error
+			if os.Geteuid() == 0 {
+				moveErr = exec.Command("mv", "-f", tmpFile, execPath).Run()
+			} else {
+				cmd := exec.Command("sudo", "mv", "-f", tmpFile, execPath)
+				cmd.Stdin = os.Stdin
+				cmd.Stdout = os.Stdout
+				cmd.Stderr = os.Stderr
+				moveErr = cmd.Run()
+			}
+			if moveErr != nil {
+				_ = os.Remove(tmpFile)
+				fmt.Printf("%sFailed to replace binary at %s: %v%s\n", tester.Red, execPath, moveErr, tester.Reset)
+				os.Exit(1)
+			}
+		}
+		_ = os.Chmod(execPath, 0755)
 	}
-	_ = os.Chmod(execPath, 0755)
 
 	fmt.Printf("%s✓ Updated successfully at %s%s\n", tester.Green, execPath, tester.Reset)
 
@@ -951,7 +990,7 @@ func handleUpdate() {
 
 func handleCompletion() {
 	if len(os.Args) < 3 {
-		fmt.Printf(`%sUsage: smartdns completion <fish|zsh|bash>%s
+		fmt.Printf(`%sUsage: smartdns completion <fish|zsh|bash|powershell>%s
 
 Setup instructions:
   # Fish (macOS / Linux):
@@ -964,6 +1003,10 @@ Setup instructions:
 
   # Bash (Linux):
   smartdns completion bash | sudo tee /etc/bash_completion.d/smartdns >/dev/null
+
+  # PowerShell (Windows / Cross-platform):
+  smartdns completion powershell | Out-String | Invoke-Expression
+  # Or persist in PowerShell profile: Add to $PROFILE
 `, tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}

@@ -25,7 +25,7 @@ const (
 )
 
 func runElevated(name string, args ...string) ([]byte, error) {
-	if os.Geteuid() == 0 {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		cmd := exec.Command(name, args...)
 		return cmd.CombinedOutput()
 	}
@@ -120,6 +120,10 @@ WantedBy=multi-user.target
 		return nil
 	}
 
+	if runtime.GOOS == "windows" {
+		return windowsInstall(absBin)
+	}
+
 	return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 }
 
@@ -133,6 +137,9 @@ func Uninstall() error {
 		script := fmt.Sprintf("systemctl disable smartdns && rm -f %s && systemctl daemon-reload", LinuxUnit)
 		_, err := runElevated("sh", "-c", script)
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		return windowsUninstall()
 	}
 	return nil
 }
@@ -160,6 +167,9 @@ func Start() error {
 		_, err := runElevated("systemctl", "start", "smartdns")
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		return windowsStart()
+	}
 	return nil
 }
 
@@ -173,6 +183,9 @@ func Stop() error {
 		_, err := runElevated("systemctl", "stop", "smartdns")
 		return err
 	}
+	if runtime.GOOS == "windows" {
+		return windowsStop()
+	}
 	return nil
 }
 
@@ -182,6 +195,9 @@ func Restart() error {
 	}
 	if _, err := os.Stat(LinuxUnit); os.IsNotExist(err) && runtime.GOOS == "linux" {
 		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return windowsRestart()
 	}
 	_ = Stop()
 	return Start()
@@ -236,6 +252,10 @@ func Status() (bool, int, error) {
 		return active, pid, nil
 	}
 
+	if runtime.GOOS == "windows" {
+		return windowsStatus()
+	}
+
 	return false, 0, nil
 }
 
@@ -267,5 +287,79 @@ func IsSystemDNSSet(iface string) bool {
 	if runtime.GOOS == "linux" {
 		return network.IsLinuxDNSSet(iface)
 	}
+	if runtime.GOOS == "windows" {
+		return network.IsWindowsDNSSet(iface)
+	}
 	return false
 }
+
+func windowsInstall(absBin string) error {
+	taskCmd := fmt.Sprintf(`"%s" daemon`, absBin)
+	cmd := exec.Command("schtasks", "/create", "/tn", "smartdns", "/tr", taskCmd, "/sc", "onlogon", "/rl", "highest", "/f")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to create scheduled task: %w (%s)", err, string(out))
+	}
+	return Start()
+}
+
+func windowsUninstall() error {
+	_ = Stop()
+	cmd := exec.Command("schtasks", "/delete", "/tn", "smartdns", "/f")
+	_, err := cmd.CombinedOutput()
+	return err
+}
+
+func windowsStart() error {
+	if IsListening() {
+		return nil
+	}
+	// Try schtasks first
+	cmd := exec.Command("schtasks", "/run", "/tn", "smartdns")
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+	// Fallback to powershell background process
+	psCmd := "Start-Process -FilePath 'smartdns' -ArgumentList 'daemon' -WindowStyle Hidden"
+	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	_ = cmdPS.Start()
+	return nil
+}
+
+func windowsStop() error {
+	_ = exec.Command("schtasks", "/end", "/tn", "smartdns").Run()
+	cmd := exec.Command("taskkill", "/f", "/im", "smartdns.exe")
+	_ = cmd.Run()
+	return nil
+}
+
+func windowsRestart() error {
+	_ = Stop()
+	time.Sleep(500 * time.Millisecond)
+	return Start()
+}
+
+func windowsStatus() (bool, int, error) {
+	cmd := exec.Command("tasklist", "/fi", "imagename eq smartdns.exe", "/fo", "csv", "/nh")
+	out, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, line := range lines {
+			fields := strings.Split(line, ",")
+			if len(fields) >= 2 {
+				name := strings.Trim(fields[0], "\" ")
+				if strings.EqualFold(name, "smartdns.exe") {
+					pidStr := strings.Trim(fields[1], "\" ")
+					if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+						return true, pid, nil
+					}
+					return true, 0, nil
+				}
+			}
+		}
+	}
+	if IsListening() {
+		return true, 0, nil
+	}
+	return false, 0, nil
+}
+

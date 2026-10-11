@@ -56,8 +56,8 @@ complete -c smartdns -n "__fish_seen_subcommand_from on" -a "(__smartdns_profile
 complete -c smartdns -n "__fish_seen_subcommand_from test" -a "(__smartdns_domains)" -d "Domain"
 complete -c smartdns -n "__fish_seen_subcommand_from service" -a "install uninstall start stop restart status"
 complete -c smartdns -n "__fish_seen_subcommand_from proxy" -a "status run set"
-complete -c smartdns -n "__fish_seen_subcommand_from env" -a "fish zsh bash"
-complete -c smartdns -n "__fish_seen_subcommand_from completion" -a "fish zsh bash"
+complete -c smartdns -n "__fish_seen_subcommand_from env" -a "fish zsh bash powershell"
+complete -c smartdns -n "__fish_seen_subcommand_from completion" -a "fish zsh bash powershell"
 `
 
 const BashScript = `# Bash completion for smartdns
@@ -89,7 +89,7 @@ _smartdns_completions() {
             return 0
             ;;
         env|completion)
-            COMPREPLY=($(compgen -W "fish zsh bash" -- "$cur"))
+            COMPREPLY=($(compgen -W "fish zsh bash powershell" -- "$cur"))
             return 0
             ;;
         test)
@@ -151,7 +151,7 @@ _smartdns() {
                     _values 'proxy commands' status run set
                     ;;
                 env|completion)
-                    _values 'shell' fish zsh bash
+                    _values 'shell' fish zsh bash powershell
                     ;;
                 test)
                     _values 'domains' cloudaicompanion.googleapis.com chatgpt.com claude.ai gemini.google.com spotify.com canva.com rutracker.org notion.so google.com
@@ -164,6 +164,81 @@ _smartdns() {
 _smartdns "$@"
 `
 
+const PowerShellScript = `# PowerShell completion for smartdns
+# Install: Add to your $PROFILE:
+#   smartdns completion powershell | Out-String | Invoke-Expression
+
+Register-ArgumentCompleter -Native -CommandName smartdns -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+
+    $elements = $commandAst.Elements
+    $count = $elements.Count
+
+    if ($count -eq 1 -or ($count -eq 2 -and -not $wordToComplete)) {
+        $commands = @(
+            [System.Management.Automation.CompletionResult]::new('on', 'on', 'ParameterValue', 'Enable SmartDNS on active network interface'),
+            [System.Management.Automation.CompletionResult]::new('off', 'off', 'ParameterValue', 'Disable SmartDNS (revert to DHCP)'),
+            [System.Management.Automation.CompletionResult]::new('toggle', 'toggle', 'ParameterValue', 'Toggle DNS state'),
+            [System.Management.Automation.CompletionResult]::new('status', 'status', 'ParameterValue', 'Show service, interface, and DNS status'),
+            [System.Management.Automation.CompletionResult]::new('test', 'test', 'ParameterValue', 'Test latency, TLS ping, and routing'),
+            [System.Management.Automation.CompletionResult]::new('list', 'list', 'ParameterValue', 'List all configured DNS profiles'),
+            [System.Management.Automation.CompletionResult]::new('use', 'use', 'ParameterValue', 'Switch active DNS profile'),
+            [System.Management.Automation.CompletionResult]::new('add', 'add', 'ParameterValue', 'Add a new DoH profile'),
+            [System.Management.Automation.CompletionResult]::new('remove', 'remove', 'ParameterValue', 'Remove a DNS profile'),
+            [System.Management.Automation.CompletionResult]::new('setup', 'setup', 'ParameterValue', 'Quick configure DoH on a new machine'),
+            [System.Management.Automation.CompletionResult]::new('service', 'service', 'ParameterValue', 'Manage system daemon'),
+            [System.Management.Automation.CompletionResult]::new('daemon', 'daemon', 'ParameterValue', 'Run DNS server in foreground'),
+            [System.Management.Automation.CompletionResult]::new('update', 'update', 'ParameterValue', 'Update SmartDNS to latest version'),
+            [System.Management.Automation.CompletionResult]::new('completion', 'completion', 'ParameterValue', 'Generate shell auto-completion script'),
+            [System.Management.Automation.CompletionResult]::new('run', 'run', 'ParameterValue', 'Run command with proxy environment injected'),
+            [System.Management.Automation.CompletionResult]::new('env', 'env', 'ParameterValue', 'Output proxy environment exports for shell'),
+            [System.Management.Automation.CompletionResult]::new('proxy', 'proxy', 'ParameterValue', 'Manage local Mixed HTTP/SOCKS5 proxy bridge'),
+            [System.Management.Automation.CompletionResult]::new('version', 'version', 'ParameterValue', 'Show version'),
+            [System.Management.Automation.CompletionResult]::new('help', 'help', 'ParameterValue', 'Show help')
+        )
+        $commands | Where-Object { $_.CompletionText -like "$wordToComplete*" }
+        return
+    }
+
+    $subcommand = $elements[1].Value
+
+    switch ($subcommand) {
+        { $_ -in 'use', 'remove', 'on' } {
+            $profiles = & smartdns list 2>$null | Select-String '^[ ● ]*([a-zA-Z0-9_-]+)' | ForEach-Object {
+                if ($_ -match '^[ ● ]*([a-zA-Z0-9_-]+)') { $matches[1] }
+            }
+            $profiles | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Profile')
+            }
+        }
+        'service' {
+            $subs = @('install', 'uninstall', 'start', 'stop', 'restart', 'status')
+            $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Service command')
+            }
+        }
+        'proxy' {
+            $subs = @('status', 'run', 'set')
+            $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Proxy command')
+            }
+        }
+        { $_ -in 'env', 'completion' } {
+            $shells = @('fish', 'zsh', 'bash', 'powershell', 'pwsh')
+            $shells | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Shell')
+            }
+        }
+        'test' {
+            $domains = @('cloudaicompanion.googleapis.com', 'chatgpt.com', 'claude.ai', 'gemini.google.com', 'spotify.com', 'canva.com', 'rutracker.org', 'notion.so', 'google.com')
+            $domains | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Domain')
+            }
+        }
+    }
+}
+`
+
 // Generate returns the completion script for the requested shell
 func Generate(shell string) (string, error) {
 	switch strings.ToLower(shell) {
@@ -173,7 +248,9 @@ func Generate(shell string) (string, error) {
 		return BashScript, nil
 	case "zsh":
 		return ZshScript, nil
+	case "powershell", "pwsh":
+		return PowerShellScript, nil
 	default:
-		return "", fmt.Errorf("unsupported shell: %q (supported: fish, zsh, bash)", shell)
+		return "", fmt.Errorf("unsupported shell: %q (supported: fish, zsh, bash, powershell)", shell)
 	}
 }
