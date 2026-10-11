@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -72,6 +73,14 @@ func getLegacyConfigPath() string {
 		return `C:\ProgramData\smartdns\config.json`
 	}
 	if os.Geteuid() == 0 {
+		if runtime.GOOS == "darwin" {
+			if u := getConsoleUser(); u != "" {
+				userPath := filepath.Join("/Users", u, ".config", "smartdns", "config.json")
+				if _, err := os.Stat(userPath); err == nil {
+					return userPath
+				}
+			}
+		}
 		return "/etc/smartdns/config.json"
 	}
 	home, err := os.UserHomeDir()
@@ -85,6 +94,18 @@ func getLegacyConfigPath() string {
 		return userPath
 	}
 	return "/etc/smartdns/config.json"
+}
+
+func getConsoleUser() string {
+	cmd := exec.Command("stat", "-f", "%Su", "/dev/console")
+	out, err := cmd.Output()
+	if err == nil {
+		u := strings.TrimSpace(string(out))
+		if u != "" && u != "root" {
+			return u
+		}
+	}
+	return ""
 }
 
 func GetConfigPath() string {
@@ -108,6 +129,14 @@ func GetConfigPath() string {
 		return `C:\ProgramData\smartnet\config.json`
 	}
 	if os.Geteuid() == 0 {
+		if runtime.GOOS == "darwin" {
+			if u := getConsoleUser(); u != "" {
+				userPath := filepath.Join("/Users", u, ".config", "smartnet", "config.json")
+				if _, err := os.Stat(userPath); err == nil {
+					return userPath
+				}
+			}
+		}
 		return "/etc/smartnet/config.json"
 	}
 	home, err := os.UserHomeDir()

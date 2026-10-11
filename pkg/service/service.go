@@ -43,7 +43,7 @@ func runElevated(name string, args ...string) ([]byte, error) {
 	cmd = exec.Command("sudo", append([]string{name}, args...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = nil
 	return nil, cmd.Run()
 }
 
@@ -197,8 +197,10 @@ func Start() error {
 
 func Stop() error {
 	if runtime.GOOS == "darwin" {
-		_, _ = runElevated("launchctl", "bootout", "system/"+LegacyMacLabel)
-		_, _ = runElevated("launchctl", "unload", LegacyMacPlistPath)
+		if _, err := os.Stat(LegacyMacPlistPath); err == nil {
+			_, _ = runElevated("launchctl", "bootout", "system/"+LegacyMacLabel)
+			_, _ = runElevated("launchctl", "unload", LegacyMacPlistPath)
+		}
 		_, _ = runElevated("launchctl", "bootout", "system/"+MacLabel)
 		_, _ = runElevated("launchctl", "unload", MacPlistPath)
 		return nil
