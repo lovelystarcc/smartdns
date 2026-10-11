@@ -248,14 +248,14 @@ func (s *Server) Start() error {
 	errCh := make(chan error, 2)
 
 	go func() {
-		log.Printf("[smartdns] Listening UDP on %s", addr)
+		log.Printf("[smartnet] Listening UDP on %s", addr)
 		if err := s.udpServer.ListenAndServe(); err != nil {
 			errCh <- err
 		}
 	}()
 
 	go func() {
-		log.Printf("[smartdns] Listening TCP on %s", addr)
+		log.Printf("[smartnet] Listening TCP on %s", addr)
 		if err := s.tcpServer.ListenAndServe(); err != nil {
 			errCh <- err
 		}
@@ -315,7 +315,7 @@ func (s *Server) recordFailure(upstream string) {
 	s.consecutiveFails++
 	if s.consecutiveFails >= 3 && s.state == StateHealthy {
 		s.state = StateDegraded
-		log.Printf("[smartdns] ⚠️ Upstream DoH (%s) failed 3 consecutive times. Switched to Automatic Fallback mode (routing via standard DNS without delay).", upstream)
+		log.Printf("[smartnet] Upstream DoH (%s) failed 3 consecutive times. Switched to automatic fallback mode.", upstream)
 	}
 }
 
@@ -325,7 +325,7 @@ func (s *Server) recordSuccess(upstream string) {
 
 	if s.state == StateDegraded {
 		s.state = StateHealthy
-		log.Printf("[smartdns] ✅ Primary Upstream DoH (%s) recovered! Restored SmartDNS routing.", upstream)
+		log.Printf("[smartnet] Primary Upstream DoH (%s) recovered. Restored normal routing.", upstream)
 	}
 	s.consecutiveFails = 0
 }
@@ -539,7 +539,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		// Normal path: Query Primary DoH with a 2.5s timeout
 		resp, err = s.queryDoHWithTimeout(r, active.Upstream, 2500*time.Millisecond)
 		if err != nil {
-			log.Printf("[smartdns] ⚠️ Upstream DoH error for %s (%v).", q.Name, err)
+			log.Printf("[smartnet] Upstream DoH error for %s (%v)", q.Name, err)
 			s.recordFailure(active.Upstream)
 
 			// Try secondary DoH if configured
@@ -555,7 +555,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 				resp, err = s.queryFallback(r)
 				usedFallback = true
 				if err != nil {
-					log.Printf("[smartdns] ❌ Fallback also failed for %s: %v", q.Name, err)
+					log.Printf("[smartnet] Fallback failed for %s: %v", q.Name, err)
 					dns.HandleFailed(w, r)
 					return
 				}
@@ -574,7 +574,7 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 			resp, err = s.queryFallback(r)
 			usedFallback = true
 			if err != nil {
-				log.Printf("[smartdns] ❌ Fallback query failed for %s: %v", q.Name, err)
+				log.Printf("[smartnet] Fallback query failed for %s: %v", q.Name, err)
 				dns.HandleFailed(w, r)
 				return
 			}

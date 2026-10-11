@@ -36,7 +36,7 @@ func GetPublicIP() (*PublicIPInfo, error) {
 	// 1. Try Cloudflare trace (fast, includes country)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://1.1.1.1/cdn-cgi/trace", nil)
 	if err == nil {
-		req.Header.Set("User-Agent", "smartdns")
+		req.Header.Set("User-Agent", "smartnet")
 		if resp, err := client.Do(req); err == nil && resp.StatusCode == http.StatusOK {
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
@@ -58,7 +58,7 @@ func GetPublicIP() (*PublicIPInfo, error) {
 	// 2. Fallback to ipify.org
 	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
 	if err == nil {
-		req2.Header.Set("User-Agent", "smartdns")
+		req2.Header.Set("User-Agent", "smartnet")
 		if resp, err := client.Do(req2); err == nil && resp.StatusCode == http.StatusOK {
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))

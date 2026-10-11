@@ -59,7 +59,7 @@ func (s *Server) Start() error {
 	s.listener = l
 	s.mu.Unlock()
 
-	log.Printf("[smartdns] Proxy bridge listening on %s (Mixed HTTP/SOCKS5)", addr)
+	log.Printf("[smartnet] Proxy bridge listening on %s (Mixed HTTP/SOCKS5)", addr)
 
 	go func() {
 		for {

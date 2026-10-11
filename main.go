@@ -33,22 +33,22 @@ import (
 const Version = "2.0.0"
 
 func printHelp() {
-	fmt.Printf(`%sSmartNet CLI v%s%s — Next-Gen SmartDNS, VLESS-Reality VPN & Transparent TUN Proxy
+	fmt.Printf(`%sSmartNet CLI v%s%s — DNS, VLESS-Reality VPN & Transparent TUN Proxy
 
 %sUSAGE:%s
   smartnet <command> [arguments...]
 
 %sCORE COMMANDS:%s
-  %son%s [profile]      Enable SmartDNS on the active network interface
-  %soff%s              Disable SmartDNS (revert to default DHCP)
+  %son%s [profile]      Enable DNS on the active network interface
+  %soff%s              Disable DNS (revert to default DHCP)
   %stoggle%s           Toggle state (enable / disable)
-  %sstatus%s           Show hybrid status (DNS, VPN, TUN, Egress IP)
+  %sstatus%s           Show status (DNS, VPN, TUN, Egress IP)
   %stest%s [domains...] Test latency, TLS ping, and routing to domains
   %supdate%s           Update SmartNet to latest version from GitHub
   %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash, powershell)
 
 %sVPN & ANTI-CENSORSHIP TUNNEL (VLESS-REALITY):%s
-  %svpn%s [on|off|status]      Toggle VLESS-Reality VPN tunnel (anti-DPI camouflage)
+  %svpn%s [on|off|status]      Toggle VLESS-Reality VPN tunnel
   %svpn%s set <vless://...>    Configure VLESS Reality server URI for active profile
 
 %sGLOBAL TUN ADAPTER (TRANSPARENT PROXY):%s
@@ -56,7 +56,7 @@ func printHelp() {
 
 %sSPLIT DNS & FAKE-IP ENGINE:%s
   %sfakeip%s [on|off|status|clear] Manage zero-latency Fake-IP engine (198.18.0.0/15)
-  %sbypass%s [add|remove|list]   Manage direct resolution whitelist (.ru, banks, gov)
+  %sbypass%s [add|remove|list]   Manage direct resolution whitelist
 
 %sDEVELOPER TOOLS & PROXY BRIDGE:%s
   %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
@@ -66,14 +66,14 @@ func printHelp() {
 %sPROFILE MANAGEMENT:%s
   %slist%s             List all configured profiles
   %suse%s <name>        Switch active profile
-  %sadd%s <name> <url> [backup]  Add a new DoH profile (with optional secondary DoH)
+  %sadd%s <name> <url> [backup]  Add a new profile (with optional secondary upstream)
   %sremove%s <name>     Remove a profile
 
-%sQUICK SETUP ON A NEW PC:%s
-  %ssetup%s <url> [name] Configure everything in one command (service + profile + network)
+%sSETUP:%s
+  %ssetup%s <url> [name] Configure service, profile, and network interface
 
 %sSYSTEM DAEMON:%s
-  %sservice%s install  Install background service into startup (launchd / systemd / schtasks)
+  %sservice%s install  Install background service into startup
   %sservice%s start|stop|restart|status|uninstall
   %sdaemon%s           Run DNS server, proxy bridge, and TUN adapter in foreground
 
@@ -81,8 +81,8 @@ func printHelp() {
   smartnet setup https://dns.example.com/dns-query personal
   smartnet on
   smartnet vpn set vless://uuid@server:443?security=reality&sni=gateway.icloud.com&pbk=key&sid=id
-  smartnet vpn on      # Enable anti-DPI VLESS-Reality tunnel
-  smartnet tun on      # Route all system traffic transparently
+  smartnet vpn on
+  smartnet tun on
   smartnet status
   smartnet off
 `,
@@ -133,7 +133,7 @@ func main() {
 
 	switch cmd {
 	case "version", "-v", "--version":
-		fmt.Printf("smartnet (smartdns) version %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("smartnet version %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
 
 	case "help", "-h", "--help":
 		printHelp()
@@ -235,7 +235,7 @@ func handleOn() {
 
 	active := cfg.GetActive()
 	if active == nil {
-		fmt.Printf("%s⚠️ No DNS profiles configured!%s\nAdd your server:\n  smartdns setup <url> [name]\n  smartdns add <name> <url>\n", tester.Yellow, tester.Reset)
+		fmt.Printf("%sNo DNS profiles configured.%s\nAdd a server:\n  smartnet setup <url> [name]\n  smartnet add <name> <url>\n", tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
 	_ = network.EnsureRouteBypass(active.Upstream)
@@ -254,7 +254,7 @@ func handleOn() {
 	}
 
 	profileName := cfg.ActiveProfile
-	fmt.Printf("%s🟢 SmartDNS enabled (127.0.0.1)%s on interface %s%s%s [Profile: %s%s%s]\n",
+	fmt.Printf("%sDNS enabled (127.0.0.1)%s on interface %s%s%s [Profile: %s%s%s]\n",
 		tester.Green, tester.Reset,
 		tester.Bold, iface, tester.Reset,
 		tester.Cyan, profileName, tester.Reset,
@@ -272,7 +272,7 @@ func handleOff() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("%s⚪ SmartDNS disabled (DHCP)%s on interface %s%s%s\n",
+	fmt.Printf("%sDNS disabled (DHCP)%s on interface %s%s%s\n",
 		tester.Dim, tester.Reset,
 		tester.Bold, iface, tester.Reset,
 	)
@@ -298,7 +298,7 @@ func handleStatus() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n%sSmartDNS Status%s\n", tester.Bold, tester.Reset)
+	fmt.Printf("\n%sSmartNet Status%s\n", tester.Bold, tester.Reset)
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
 
 	// 1. Daemon service status
@@ -357,7 +357,7 @@ func handleStatus() {
 			fmt.Printf(" Description                     : %s%s%s\n", tester.Dim, active.Desc, tester.Reset)
 		}
 	} else {
-		fmt.Printf(" Active profile                  : %sNot configured%s (run: smartdns setup <url>)\n", tester.Yellow, tester.Reset)
+		fmt.Printf(" Active profile                  : %sNot configured%s (run: smartnet setup <url>)\n", tester.Yellow, tester.Reset)
 	}
 
 	// 5. Split DNS Engine
@@ -368,7 +368,7 @@ func handleStatus() {
 	fmt.Printf(" Split DNS Engine                : %s● Active%s (Direct bypass: %s)\n", tester.Green, tester.Reset, bypassSummary)
 
 	// 6. Fake-IP Engine
-	fakeIPStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartdns fakeip on')", tester.Yellow, tester.Reset)
+	fakeIPStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartnet fakeip on')", tester.Yellow, tester.Reset)
 	if active != nil && active.FakeIP {
 		alloc, _ := fakeip.DefaultPool.Stats()
 		fakeIPStr = fmt.Sprintf("%s● Active%s (%d IPs allocated in 198.18.0.0/15)", tester.Green, tester.Reset, alloc)
@@ -429,7 +429,7 @@ func handleTest() {
 
 	domains := os.Args[2:]
 
-	fmt.Printf("\n%s🔍 Testing connection via SmartDNS%s\n", tester.Bold, tester.Reset)
+	fmt.Printf("\n%sTesting connection via SmartNet%s\n", tester.Bold, tester.Reset)
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────────────────" + tester.Reset)
 
 	iface, _ := network.ActiveInterface()
@@ -467,7 +467,7 @@ func handleList() {
 	}
 
 	if len(cfg.Profiles) == 0 {
-		fmt.Printf("\n%sDNS profile list is empty.%s\nAdd your server:\n  smartdns setup <url> [name]\n  smartdns add <name> <url>\n\n", tester.Yellow, tester.Reset)
+		fmt.Printf("\n%sDNS profile list is empty.%s\nAdd a server:\n  smartnet setup <url> [name]\n  smartnet add <name> <url>\n\n", tester.Yellow, tester.Reset)
 		return
 	}
 
@@ -490,12 +490,12 @@ func handleList() {
 		}
 	}
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-	fmt.Printf("Switch profile: %ssmartdns use <name>%s\n\n", tester.Cyan, tester.Reset)
+	fmt.Printf("Switch profile: %ssmartnet use <name>%s\n\n", tester.Cyan, tester.Reset)
 }
 
 func handleUse() {
 	if len(os.Args) < 3 {
-		fmt.Printf("%sUsage: smartdns use <profile_name>%s\n", tester.Yellow, tester.Reset)
+		fmt.Printf("%sUsage: smartnet use <profile_name>%s\n", tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
 	name := os.Args[2]
@@ -523,11 +523,11 @@ func handleUse() {
 
 func handleAdd() {
 	if len(os.Args) < 4 {
-		fmt.Printf(`%sUsage: smartdns add <name> <upstream_url> [backup_url] [description]%s
+		fmt.Printf(`%sUsage: smartnet add <name> <upstream_url> [backup_url] [description]%s
 
 Examples:
-  smartdns add personal https://dns.example.com/dns-query
-  smartdns add personal https://dns.example.com/dns-query https://1.1.1.1/dns-query "With Cloudflare backup"
+  smartnet add personal https://dns.example.com/dns-query
+  smartnet add personal https://dns.example.com/dns-query https://1.1.1.1/dns-query "With Cloudflare backup"
 `, tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
@@ -577,7 +577,7 @@ Examples:
 
 func handleRemove() {
 	if len(os.Args) < 3 {
-		fmt.Printf("%sUsage: smartdns remove <name>%s\n", tester.Yellow, tester.Reset)
+		fmt.Printf("%sUsage: smartnet remove <name>%s\n", tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
 	name := os.Args[2]
@@ -603,10 +603,10 @@ func handleRemove() {
 
 func handleSetup() {
 	if len(os.Args) < 3 {
-		fmt.Printf(`%sUsage: smartdns setup <upstream_url> [profile_name]%s
+		fmt.Printf(`%sUsage: smartnet setup <upstream_url> [profile_name]%s
 
 Example:
-  sudo smartdns setup https://dns.example.com/dns-query personal
+  sudo smartnet setup https://dns.example.com/dns-query personal
 `, tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
@@ -617,7 +617,7 @@ Example:
 		profileName = os.Args[3]
 	}
 
-	fmt.Printf("\n%s🚀 Quick setup for SmartDNS...%s\n", tester.Bold, tester.Reset)
+	fmt.Printf("\n%sQuick setup for SmartNet...%s\n", tester.Bold, tester.Reset)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -627,7 +627,7 @@ Example:
 	_ = cfg.AddProfile(&config.Profile{
 		Name:     profileName,
 		Upstream: upstream,
-		Desc:     "Custom SmartDNS server",
+		Desc:     "Custom DNS server",
 	})
 	_ = cfg.SetActive(profileName)
 	_ = cfg.Save()
@@ -636,7 +636,7 @@ Example:
 	// Install service
 	binPath, err := os.Executable()
 	if err != nil {
-		binPath = "smartdns"
+		binPath = "smartnet"
 	}
 	if err := service.Install(binPath); err != nil {
 		fmt.Printf("%s [!] Service warning: %v%s\n", tester.Yellow, err, tester.Reset)
@@ -663,22 +663,22 @@ Example:
 	m.SetQuestion("google.com.", dns.TypeA)
 	r, _, err := c.Exchange(m, "127.0.0.1:53")
 	if err == nil && r != nil && len(r.Answer) > 0 {
-		fmt.Printf("\n%s✅ Setup completed successfully! SmartDNS is active and running.%s\n\n", tester.Bold+tester.Green, tester.Reset)
+		fmt.Printf("\n%sSetup completed successfully. SmartNet is active and running.%s\n\n", tester.Bold+tester.Green, tester.Reset)
 	} else {
-		fmt.Printf("\n%s⚠️  Setup completed, but the test query did not respond immediately.%s\n\n", tester.Yellow, tester.Reset)
+		fmt.Printf("\n%sSetup completed, but the test query did not respond immediately.%s\n\n", tester.Yellow, tester.Reset)
 	}
 }
 
 func handleService() {
 	if len(os.Args) < 3 {
-		fmt.Printf("%sUsage: smartdns service <install|uninstall|start|stop|restart|status>%s\n", tester.Yellow, tester.Reset)
+		fmt.Printf("%sUsage: smartnet service <install|uninstall|start|stop|restart|status>%s\n", tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
 
 	action := strings.ToLower(os.Args[2])
 	binPath, err := os.Executable()
 	if err != nil {
-		binPath = "smartdns"
+		binPath = "smartnet"
 	}
 
 	switch action {
@@ -738,7 +738,7 @@ func handleDaemon() {
 		log.Fatalf("No active DNS profile configured")
 	}
 
-	log.Printf("[smartdns] Starting server (profile: %s, upstream: %s)", active.Name, active.Upstream)
+	log.Printf("[smartnet] Starting server (profile: %s, upstream: %s)", active.Name, active.Upstream)
 
 	srv := resolver.New(cfg)
 	if err := srv.Start(); err != nil {
@@ -747,19 +747,19 @@ func handleDaemon() {
 
 	proxySrv := proxy.New(cfg)
 	if err := proxySrv.Start(); err != nil {
-		log.Printf("[smartdns] Warning: Failed to start proxy bridge: %v", err)
+		log.Printf("[smartnet] Warning: Failed to start proxy bridge: %v", err)
 	}
 
 	var tunStack *tun.Stack
 	if active.TUN {
 		ts, err := tun.NewStack(cfg)
 		if err != nil {
-			log.Printf("[smartdns] Warning: Failed to create TUN adapter: %v", err)
+			log.Printf("[smartnet] Warning: Failed to create TUN adapter: %v", err)
 		} else if err := ts.Start(); err != nil {
-			log.Printf("[smartdns] Warning: Failed to start TUN stack: %v", err)
+			log.Printf("[smartnet] Warning: Failed to start TUN stack: %v", err)
 		} else {
 			tunStack = ts
-			log.Printf("[smartdns] TUN adapter '%s' active (198.18.0.0/15 -> userspace netstack)", tunStack.DeviceName())
+			log.Printf("[smartnet] TUN adapter '%s' active (198.18.0.0/15 -> userspace netstack)", tunStack.DeviceName())
 		}
 	}
 
@@ -768,7 +768,7 @@ func handleDaemon() {
 
 	for sig := range sigCh {
 		if sig == syscall.SIGHUP {
-			log.Println("[smartdns] Received SIGHUP, reloading configuration...")
+			log.Println("[smartnet] Received SIGHUP, reloading configuration...")
 			newCfg, err := config.Load()
 			if err == nil {
 				cfg = newCfg
@@ -789,13 +789,13 @@ func handleDaemon() {
 					ts, err := tun.NewStack(cfg)
 					if err == nil && ts.Start() == nil {
 						tunStack = ts
-						log.Printf("[smartdns] TUN adapter '%s' reloaded", tunStack.DeviceName())
+						log.Printf("[smartnet] TUN adapter '%s' reloaded", tunStack.DeviceName())
 					}
 				}
 			}
 			continue
 		}
-		log.Println("[smartdns] Shutting down...")
+		log.Println("[smartnet] Shutting down...")
 		if tunStack != nil {
 			tunStack.Stop()
 		}
@@ -807,12 +807,12 @@ func handleDaemon() {
 
 func handleRun() {
 	if len(os.Args) < 3 {
-		fmt.Printf(`%sUsage: smartdns run [--] <command> [args...]%s
+		fmt.Printf(`%sUsage: smartnet run [--] <command> [args...]%s
 
 Examples:
-  smartdns run -- git clone https://github.com/...
-  smartdns run -- curl -I https://blocked-site.com
-  smartdns run brew update
+  smartnet run -- git clone https://github.com/...
+  smartnet run -- curl -I https://blocked-site.com
+  smartnet run brew update
 `, tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
@@ -937,16 +937,16 @@ func handleProxy() {
 		if active {
 			statusStr = fmt.Sprintf("%s● Active%s", tester.Green, tester.Reset)
 		}
-		fmt.Printf("\n%sSmartDNS Proxy Bridge%s\n", tester.Bold, tester.Reset)
+		fmt.Printf("\n%sSmartNet Proxy Bridge%s\n", tester.Bold, tester.Reset)
 		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
 		fmt.Printf(" Local listener  : %s (%s, Mixed HTTP/SOCKS5)\n", proxyAddr, statusStr)
 		if cfg != nil && cfg.GetActive() != nil && cfg.GetActive().ProxyUpstream != "" {
 			fmt.Printf(" Proxy upstream  : %s\n", cfg.GetActive().ProxyUpstream)
 		} else {
-			fmt.Printf(" Proxy upstream  : Direct dial via SmartDNS\n")
+			fmt.Printf(" Proxy upstream  : Direct dial via SmartNet\n")
 		}
 		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-		fmt.Printf("Usage:\n  smartdns proxy status\n  smartdns proxy run\n  smartdns proxy set <upstream_url>\n\n")
+		fmt.Printf("Usage:\n  smartnet proxy status\n  smartnet proxy run\n  smartnet proxy set <upstream_url>\n\n")
 		return
 	}
 
@@ -963,14 +963,14 @@ func handleProxy() {
 		if err := srv.Start(); err != nil {
 			log.Fatalf("Failed to start proxy bridge: %v", err)
 		}
-		log.Printf("[smartdns] Running standalone proxy bridge on %s. Press Ctrl+C to stop.", proxyAddr)
+		log.Printf("[smartnet] Running standalone proxy bridge on %s. Press Ctrl+C to stop.", proxyAddr)
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 		<-sigCh
 		srv.Stop()
 	case "set":
 		if len(os.Args) < 4 {
-			fmt.Printf("%sUsage: smartdns proxy set <upstream_url>%s (e.g. socks5://1.2.3.4:1080)\n", tester.Yellow, tester.Reset)
+			fmt.Printf("%sUsage: smartnet proxy set <upstream_url>%s (e.g. socks5://1.2.3.4:1080)\n", tester.Yellow, tester.Reset)
 			os.Exit(1)
 		}
 		active := cfg.GetActive()
@@ -1112,22 +1112,22 @@ func handleUpdate() {
 
 func handleCompletion() {
 	if len(os.Args) < 3 {
-		fmt.Printf(`%sUsage: smartdns completion <fish|zsh|bash|powershell>%s
+		fmt.Printf(`%sUsage: smartnet completion <fish|zsh|bash|powershell>%s
 
 Setup instructions:
   # Fish (macOS / Linux):
-  smartdns completion fish > ~/.config/fish/completions/smartdns.fish
+  smartnet completion fish > ~/.config/fish/completions/smartnet.fish
 
   # Zsh (macOS / Linux):
   mkdir -p ~/.zsh/completion
-  smartdns completion zsh > ~/.zsh/completion/_smartdns
+  smartnet completion zsh > ~/.zsh/completion/_smartnet
   # Ensure 'fpath=(~/.zsh/completion $fpath)' is in ~/.zshrc
 
   # Bash (Linux):
-  smartdns completion bash | sudo tee /etc/bash_completion.d/smartdns >/dev/null
+  smartnet completion bash | sudo tee /etc/bash_completion.d/smartnet >/dev/null
 
   # PowerShell (Windows / Cross-platform):
-  smartdns completion powershell | Out-String | Invoke-Expression
+  smartnet completion powershell | Out-String | Invoke-Expression
   # Or persist in PowerShell profile: Add to $PROFILE
 `, tester.Yellow, tester.Reset)
 		os.Exit(1)
@@ -1168,7 +1168,7 @@ func handleFakeIP() {
 		fmt.Printf(" State              : %s\n", statusStr)
 		fmt.Printf(" Pool Allocated     : %d / %d addresses\n", alloc, total)
 		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-		fmt.Printf("Usage:\n  smartdns fakeip on     - Enable Fake-IP mode (0ms instant DNS)\n  smartdns fakeip off    - Disable Fake-IP mode (standard DoH resolution)\n  smartdns fakeip clear  - Clear allocated Fake-IP cache\n\n")
+		fmt.Printf("Usage:\n  smartnet fakeip on     - Enable Fake-IP mode (0ms instant DNS)\n  smartnet fakeip off    - Disable Fake-IP mode (standard DoH resolution)\n  smartnet fakeip clear  - Clear allocated Fake-IP cache\n\n")
 		return
 	}
 
@@ -1217,13 +1217,13 @@ func handleBypass() {
 		if len(active.BypassDomains) > 0 {
 			fmt.Printf(" Custom bypass    : %s%s%s\n", tester.Cyan, strings.Join(active.BypassDomains, ", "), tester.Reset)
 		} else {
-			fmt.Printf(" Custom bypass    : None (add using 'smartdns bypass add <domain>')\n")
+			fmt.Printf(" Custom bypass    : None (add using 'smartnet bypass add <domain>')\n")
 		}
 		if len(active.ProxyDomains) > 0 {
 			fmt.Printf(" Force proxy      : %s%s%s\n", tester.Yellow, strings.Join(active.ProxyDomains, ", "), tester.Reset)
 		}
 		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-		fmt.Printf("Usage:\n  smartdns bypass add <domain>     - Add domain/suffix to bypass\n  smartdns bypass remove <domain>  - Remove domain from bypass\n  smartdns bypass list             - Show current rules\n\n")
+		fmt.Printf("Usage:\n  smartnet bypass add <domain>     - Add domain/suffix to bypass\n  smartnet bypass remove <domain>  - Remove domain from bypass\n  smartnet bypass list             - Show current rules\n\n")
 		return
 	}
 
@@ -1231,7 +1231,7 @@ func handleBypass() {
 	switch action {
 	case "add":
 		if len(os.Args) < 4 {
-			fmt.Printf("%sUsage: smartdns bypass add <domain>%s\n", tester.Yellow, tester.Reset)
+			fmt.Printf("%sUsage: smartnet bypass add <domain>%s\n", tester.Yellow, tester.Reset)
 			os.Exit(1)
 		}
 		domain := os.Args[3]
@@ -1241,7 +1241,7 @@ func handleBypass() {
 		fmt.Printf("%s✓ Added '%s' to bypass list for profile '%s'. Daemon reloaded.%s\n", tester.Green, domain, active.Name, tester.Reset)
 	case "remove", "rm", "delete":
 		if len(os.Args) < 4 {
-			fmt.Printf("%sUsage: smartdns bypass remove <domain>%s\n", tester.Yellow, tester.Reset)
+			fmt.Printf("%sUsage: smartnet bypass remove <domain>%s\n", tester.Yellow, tester.Reset)
 			os.Exit(1)
 		}
 		domain := os.Args[3]
@@ -1279,7 +1279,7 @@ func handleTUN() {
 		fmt.Printf(" State              : %s\n", statusStr)
 		fmt.Printf(" Subnet Routing     : 198.18.0.0/15 (Fake-IP tun2socks)\n")
 		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-		fmt.Printf("Usage:\n  smartdns tun on      - Enable Global TUN mode (transparent proxy for all apps)\n  smartdns tun off     - Disable Global TUN mode\n  smartdns tun status  - Show TUN adapter status\n\n")
+		fmt.Printf("Usage:\n  smartnet tun on      - Enable Global TUN mode (transparent proxy for all apps)\n  smartnet tun off     - Disable Global TUN mode\n  smartnet tun status  - Show TUN adapter status\n\n")
 		return
 	}
 
@@ -1291,7 +1291,7 @@ func handleTUN() {
 		_ = cfg.Save()
 		_ = service.Restart()
 		fmt.Printf("%s✓ TUN mode enabled for profile '%s'. Fake-IP enabled. Daemon reloaded.%s\n", tester.Green, active.Name, tester.Reset)
-		fmt.Println("  All system applications now route through SmartDNS transparently without proxy settings.")
+		fmt.Println("  All system applications now route through SmartNet transparently without proxy settings.")
 	case "off", "disable":
 		active.TUN = false
 		_ = cfg.Save()
@@ -1314,8 +1314,8 @@ func handleDNS() {
 		fmt.Printf(`%sSmartNet DNS Management%s
 
 Usage:
-  smartnet dns on [profile]   - Enable SmartDNS on active network interface
-  smartnet dns off            - Disable SmartDNS (restore DHCP)
+  smartnet dns on [profile]   - Enable DNS on active network interface
+  smartnet dns off            - Disable DNS (restore DHCP)
   smartnet dns toggle         - Toggle DNS on/off
   smartnet dns status         - Show DNS status
 `, tester.Bold, tester.Reset)

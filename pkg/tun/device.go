@@ -42,7 +42,7 @@ func CreateDevice(mtu int) (*Device, error) {
 		mtu = 1500
 	}
 
-	requestedName := "smartdns"
+	requestedName := "smartnet"
 	if runtime.GOOS == "darwin" {
 		// macOS utun driver requires name to be "utun" or "utunX"
 		requestedName = "utun"
@@ -59,7 +59,7 @@ func CreateDevice(mtu int) (*Device, error) {
 		return nil, fmt.Errorf("failed to get TUN device name: %w", err)
 	}
 
-	log.Printf("[smartdns] Allocated TUN device: %s (MTU: %d)", realName, mtu)
+	log.Printf("[smartnet] Allocated TUN device: %s (MTU: %d)", realName, mtu)
 
 	d := &Device{
 		tunDev: dev,
@@ -68,7 +68,7 @@ func CreateDevice(mtu int) (*Device, error) {
 	}
 
 	if err := d.setupRoutes(); err != nil {
-		log.Printf("[smartdns] Warning: Failed to configure routes for %s: %v", realName, err)
+		log.Printf("[smartnet] Warning: Failed to configure routes for %s: %v", realName, err)
 		// Don't fail hard if route exists or if non-root, keep device open
 	}
 
@@ -86,7 +86,7 @@ func (d *Device) setupRoutes() error {
 		if out, err := runElevated("route", "add", "-net", "198.18.0.0/15", "-interface", d.name); err != nil {
 			return fmt.Errorf("route add failed: %s (%w)", string(out), err)
 		}
-		log.Printf("[smartdns] Configured macOS route: 198.18.0.0/15 -> %s", d.name)
+		log.Printf("[smartnet] Configured macOS route: 198.18.0.0/15 -> %s", d.name)
 
 	case "linux":
 		// Assign IP and bring up interface
@@ -94,11 +94,11 @@ func (d *Device) setupRoutes() error {
 		if out, err := runElevated("ip", "link", "set", "dev", d.name, "up"); err != nil {
 			return fmt.Errorf("ip link set up failed: %s (%w)", string(out), err)
 		}
-		// Route 198.18.0.0/15 into smartdns interface
+		// Route 198.18.0.0/15 into smartnet interface
 		if out, err := runElevated("ip", "route", "add", "198.18.0.0/15", "dev", d.name); err != nil {
 			return fmt.Errorf("ip route add failed: %s (%w)", string(out), err)
 		}
-		log.Printf("[smartdns] Configured Linux route: 198.18.0.0/15 -> %s", d.name)
+		log.Printf("[smartnet] Configured Linux route: 198.18.0.0/15 -> %s", d.name)
 
 	case "windows":
 		// Set static IP on adapter
@@ -107,7 +107,7 @@ func (d *Device) setupRoutes() error {
 		if out, err := runElevated("route", "add", "198.18.0.0", "mask", "255.254.0.0", "198.18.0.1", "metric", "1"); err != nil {
 			return fmt.Errorf("route add failed: %s (%w)", string(out), err)
 		}
-		log.Printf("[smartdns] Configured Windows route: 198.18.0.0/15 -> %s", d.name)
+		log.Printf("[smartnet] Configured Windows route: 198.18.0.0/15 -> %s", d.name)
 	}
 
 	return nil

@@ -1,195 +1,178 @@
-# SmartNet CLI
+# SmartNet
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/lovelystarcc/smartnet?color=brightgreen)](https://github.com/lovelystarcc/smartnet/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Release](https://img.shields.io/github/v/release/lovelystarcc/smartnet?color=blue)](https://github.com/lovelystarcc/smartnet/releases/latest)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)]()
 
-A high-performance, standalone **Go** networking utility combining **SmartDNS (DNS-over-HTTPS)**, **VLESS-Reality Anti-Censorship VPN**, and a **Virtual TUN Adapter** on macOS, Linux, and Windows.
-
-SmartNet *(formerly SmartDNS)* gives you the ultimate hybrid networking stack:
-* **SmartDNS Mode:** Ultra-low ping DNS routing with zero packet overhead for streaming, games, and AI platforms.
-* **VLESS-Reality VPN Mode:** Military-grade anti-DPI tunnel disguised as legitimate TLS traffic (e.g., `apple.com`, `microsoft.com`) to bypass deep packet inspection and aggressive censorship.
-* **Virtual TUN Mode:** Transparent userspace netstack (`gVisor`) routing all system applications without configuring proxy settings.
-* **100% Backward Compatible:** Preserves legacy `smartdns` CLI commands, symlinks, and automatically migrates existing profile configurations.
+Cross-platform networking CLI combining DNS-over-HTTPS (DoH), VLESS-Reality proxy tunneling, and transparent virtual TUN routing for macOS, Linux, and Windows.
 
 ---
 
-## ⚡ Quick Install
+## Installation
 
-Install the latest pre-built binary in a single command (no Go installation required):
-
+### macOS & Linux
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartnet/main/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/lovelystarcc/smartnet/main/install.sh | bash
 ```
 
-On Windows, download the latest `smartnet-windows-amd64.exe` from [GitHub Releases](https://github.com/lovelystarcc/smartnet/releases/latest) and place it in your `PATH`.
+### Windows
+Run in PowerShell as Administrator:
+```powershell
+irm https://raw.githubusercontent.com/lovelystarcc/smartnet/main/install.ps1 | iex
+```
+
+Pre-built binaries for all architectures (amd64, arm64) are available on the [Releases](https://github.com/lovelystarcc/smartnet/releases/latest) page.
 
 ---
 
-## 🚀 Quick Setup on a New Machine
+## Quick Start
 
-A single command configures your personal network on a new computer:
-
+### 1. Initial Setup
+Configures upstream DoH, installs the background service into startup, and sets system DNS:
 ```bash
-# macOS / Linux:
+# macOS / Linux (requires root):
 sudo smartnet setup https://dns.example.com/dns-query personal
 
-# Windows (Run PowerShell / CMD as Administrator):
+# Windows (Administrator PowerShell):
 smartnet setup https://dns.example.com/dns-query personal
 ```
 
-This command automatically:
-1. Creates a `personal` profile with your upstream DoH server.
-2. Installs and starts the background resolver daemon (`launchd` on macOS, `systemd` on Linux, Task Scheduler on Windows).
-3. Activates DNS `127.0.0.1` on the active network interface (`Wi-Fi` / `Ethernet`).
-4. Verifies connectivity and displays the current status.
+### 2. Toggle Routing
+```bash
+smartnet on      # Enable DNS routing on active network interface
+smartnet off     # Restore standard DHCP DNS
+smartnet toggle  # Toggle state
+```
+
+### 3. Diagnostics
+```bash
+smartnet test    # Verify DNS latency, TLS handshake, and routing
+smartnet status  # Display current status of all subsystems
+```
 
 ---
 
-## 🛡️ VLESS-Reality Anti-Censorship VPN
+## Operating Modes
 
-SmartNet v2.0 introduces native support for **VLESS-Reality**, the state-of-the-art anti-censorship protocol designed to deceive active DPI scanners:
-
+### DNS Mode
+Encrypted RFC 8484 DNS-over-HTTPS resolver running locally on `127.0.0.1:53` with TTL caching, automatic gateway fallback, and split DNS bypass for local domains.
 ```bash
-# 1. Configure your VLESS Reality connection string
-smartnet vpn set "vless://<uuid>@<server>:443?encryption=none&security=reality&sni=gateway.icloud.com&pbk=<public_key>&sid=<short_id>&flow=xtls-rprx-vision"
+smartnet on
+smartnet off
+```
 
-# 2. Activate the VPN tunnel
+### VLESS-Reality VPN Mode
+Anti-censorship tunnel using pure Go VLESS implementation with XTLS-RPRX-Vision and Reality TLS camouflage (SNI masking). Routes proxy bridge and transparent TUN traffic through the encrypted tunnel.
+```bash
+smartnet vpn set "vless://<uuid>@<host>:443?encryption=none&security=reality&sni=gateway.icloud.com&pbk=<public_key>&sid=<short_id>&flow=xtls-rprx-vision"
 smartnet vpn on
-
-# 3. Check tunnel state
 smartnet vpn status
-
-# 4. Turn off VPN tunnel (revert to direct DoH)
 smartnet vpn off
 ```
 
-| Command | Description |
-| :--- | :--- |
-| `smartnet vpn set <vless://...>` | Parse and save VLESS Reality URI parameters for active profile |
-| `smartnet vpn on` | Enable VLESS Reality tunnel for proxied and transparent connections |
-| `smartnet vpn off` | Disable VLESS Reality tunnel (switch back to direct SmartDNS) |
-| `smartnet vpn status` | Show current VPN tunnel status and camouflage details |
-
----
-
-## 🌐 Global TUN Adapter (Transparent Proxy)
-
-SmartNet includes a native **Virtual TUN Mode** powered by an embedded userspace TCP/IP stack (`golang.zx2c4.com/wireguard/tun` + `gvisor.dev/gvisor` netstack).
-
-When enabled, SmartNet creates a virtual network interface (`utun` on macOS, `smartnet` on Linux / Windows) and routes the Fake-IP subnet (`198.18.0.0/15`) directly through the userspace engine. Any application on your system—including browsers, CLI utilities, background daemons, and apps without proxy settings—is transparently accelerated.
-
+### Virtual TUN Adapter Mode
+Transparent userspace TCP/IP stack (gVisor netstack + WireGuard TUN driver). Intercepts system traffic on the `198.18.0.0/15` subnet without modifying application proxy configurations.
 ```bash
-# Enable transparent system-wide TUN mode
 smartnet tun on
-
-# Check TUN status
 smartnet tun status
-
-# Disable TUN mode
 smartnet tun off
 ```
 
 ---
 
-## 📋 Core Commands
+## Command Reference
 
+### Core
 | Command | Description |
 | :--- | :--- |
-| `smartnet on [profile]` | Enable SmartDNS on active network interface (`127.0.0.1`) |
-| `smartnet off` | Disable SmartDNS (revert to standard DHCP) |
-| `smartnet toggle` | Toggle DNS state (on / off) |
-| `smartnet status` | Show hybrid status (DNS, VPN, TUN, Egress IP) |
-| `smartnet test [domains...]` | Test resolution speed, TLS ping, HTTP status codes, and egress IP |
-| `smartnet update` | Update SmartNet to latest release from GitHub |
-| `smartnet completion <shell>` | Generate completion script (`fish`, `zsh`, `bash`, `powershell`) |
+| `smartnet on [profile]` | Enable DNS on active network interface (`127.0.0.1`) |
+| `smartnet off` | Restore network interface DNS to DHCP |
+| `smartnet toggle` | Toggle DNS state |
+| `smartnet status` | Show full subsystem status (DNS, VPN, TUN, egress IP) |
+| `smartnet test [domains...]` | Test DNS resolution, TLS ping, and route destination |
+| `smartnet update` | Update binary to latest GitHub release |
+| `smartnet completion <shell>` | Generate completions (`fish`, `zsh`, `bash`, `powershell`) |
 
-*(Note: `smartdns` remains an alias for `smartnet`, so all previous scripts and habits continue working seamlessly).*
+### VPN (VLESS-Reality)
+| Command | Description |
+| :--- | :--- |
+| `smartnet vpn set <vless://...>` | Store VLESS-Reality connection string for active profile |
+| `smartnet vpn on` | Enable VLESS-Reality tunnel |
+| `smartnet vpn off` | Disable VLESS-Reality tunnel |
+| `smartnet vpn status` | Show tunnel status and server parameters |
+
+### Transparent TUN & Split DNS
+| Command | Description |
+| :--- | :--- |
+| `smartnet tun [on\|off\|status]` | Manage virtual TUN interface and subnet routing |
+| `smartnet fakeip [on\|off\|clear]` | Manage zero-latency Fake-IP allocation (`198.18.0.0/15`) |
+| `smartnet bypass list` | List domains routed directly via local resolver |
+| `smartnet bypass add <domain>` | Add domain to direct bypass list |
+| `smartnet bypass remove <domain>` | Remove domain from direct bypass list |
+
+### Profile Management
+| Command | Description |
+| :--- | :--- |
+| `smartnet list` | List all configured profiles |
+| `smartnet use <name>` | Switch active profile |
+| `smartnet add <name> <url> [backup] [desc]` | Add upstream profile with optional fallback URL |
+| `smartnet remove <name>` | Delete a profile |
+
+### Developer Tools
+| Command | Description |
+| :--- | :--- |
+| `smartnet run [--] <cmd...>` | Execute command with `HTTP_PROXY` and `ALL_PROXY` injected |
+| `smartnet env [fish\|zsh\|pwsh]` | Print shell exports for local Mixed proxy (`127.0.0.1:7890`) |
+| `smartnet env -u` | Print shell unset commands |
+| `smartnet proxy status` | Show proxy bridge listener status |
+
+### Background Service
+| Command | Description |
+| :--- | :--- |
+| `smartnet service install` | Register background service (`launchd`, `systemd`, Task Scheduler) |
+| `smartnet service start` | Start service |
+| `smartnet service stop` | Stop service |
+| `smartnet service restart` | Restart service |
+| `smartnet service uninstall` | Remove service registration |
+| `smartnet daemon` | Run resolver and proxy bridge in foreground |
 
 ---
 
-## ⚡ Split DNS & Fake-IP Engine
+## Developer Usage
 
-SmartNet includes intelligent Split DNS resolution and a zero-latency Fake-IP engine (`198.18.0.0/15`):
-
-| Command | Description |
-| :--- | :--- |
-| `smartnet fakeip [on\|off]` | Toggle 0ms instant Fake-IP mode (allocates virtual IPs in `198.18.0.0/15`) |
-| `smartnet fakeip status` | Display pool usage and allocation statistics |
-| `smartnet fakeip clear` | Flush allocated Fake-IP cache |
-| `smartnet bypass list` | Show active domestic & custom direct bypass rules |
-| `smartnet bypass add <domain>` | Add custom domain or suffix to bypass list (direct resolution) |
-| `smartnet bypass remove <domain>` | Remove domain from bypass list |
-
-* **Zero-Latency Fake-IP**: Resolves target domains in 0 ms with instant virtual IP mapping. The proxy bridge seamlessly decodes Fake-IPs back to original hostnames upon connection.
-* **Domestic Split DNS**: Automatically routes `.ru`, `.рф`, `.su`, domestic banking/government services, and local LAN traffic through local fallback DNS, eliminating captchas and geo-restrictions on local websites.
-
----
-
-## 🛠 Developer Tools & Proxy Bridge
-
-SmartNet includes a built-in local Mixed HTTP/SOCKS5 proxy bridge (`127.0.0.1:7890`) for seamless terminal workflows:
-
-| Command | Description |
-| :--- | :--- |
-| `smartnet run [--] <cmd...>` | Execute command with proxy environment injected (`curl`, `git`, `brew`) |
-| `smartnet env [fish\|zsh\|powershell]` | Output shell export commands (`HTTP_PROXY`, `ALL_PROXY`) |
-| `smartnet env -u` | Output unset commands to clear proxy environment |
-| `smartnet proxy status` | Show status of the local Mixed HTTP/SOCKS5 listener |
-| `smartnet proxy run` | Run standalone proxy bridge in foreground |
-| `smartnet proxy set <url>` | Configure upstream proxy for active profile |
-
----
-
-## 🎛 Profile Management
-
-| Command | Description |
-| :--- | :--- |
-| `smartnet list` | List all configured profiles and show the active one |
-| `smartnet use <name>` | Switch active upstream DNS server |
-| `smartnet add <name> <url> [backup] [desc]` | Add a new DoH upstream server (with optional secondary backup DoH) |
-| `smartnet remove <name>` | Remove a profile |
-
----
-
-## 📦 Building from Source
-
-The tool compiles into a single static binary with zero external runtime dependencies:
-
+Run individual commands through the local proxy bridge (`127.0.0.1:7890`):
 ```bash
-# macOS (Apple Silicon M1/M2/M3/M4)
-GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartnet-darwin-arm64 .
+smartnet run -- git clone https://github.com/example/repo
+smartnet run -- curl -I https://example.com
+```
 
-# macOS (Intel)
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartnet-darwin-amd64 .
+Export proxy environment for current terminal session:
+```bash
+# Bash / Zsh:
+eval $(smartnet env zsh)
 
-# Linux (x86_64 / amd64)
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartnet-linux-amd64 .
+# Fish:
+eval (smartnet env fish)
 
-# Linux (ARM64 / Raspberry Pi)
-GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartnet-linux-arm64 .
-
-# Windows (x64)
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/smartnet-windows-amd64.exe .
-
-# Windows (ARM64)
-GOOS=windows GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartnet-windows-arm64.exe .
+# PowerShell:
+smartnet env powershell | Out-String | Invoke-Expression
 ```
 
 ---
 
-## 🛠 System Daemon
+## Building from Source
 
-* `smartnet service install` — Install background daemon into startup
-* `smartnet service start` — Start the daemon
-* `smartnet service stop` — Stop the daemon
-* `smartnet service restart` — Restart the daemon
-* `smartnet service uninstall` — Completely remove the daemon
-* `smartnet daemon` — Run DNS server and proxy bridge in foreground
+Requires Go 1.22+.
+
+```bash
+git clone https://github.com/lovelystarcc/smartnet.git
+cd smartnet
+go build -ldflags="-s -w" -o smartnet .
+```
 
 ---
 
-## 📄 License
+## License
 
-This project is open-sourced under the [MIT License](LICENSE).
+MIT License. See [LICENSE](LICENSE) for details.

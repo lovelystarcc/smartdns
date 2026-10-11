@@ -150,7 +150,7 @@ func Run(domains []string, vpsHost string) {
 		if r.Resolved != "" && fakeip.DefaultPool.IsFakeIP(net.ParseIP(r.Resolved)) {
 			routeStr = fmt.Sprintf("%s⚡ Fake-IP%s %s(%s)%s", Cyan, Reset, Dim, r.Resolved, Reset)
 		} else if r.IsProxy {
-			routeStr = fmt.Sprintf("%s⚡ SmartDNS%s %s(%s)%s", Magenta, Reset, Dim, r.Resolved, Reset)
+			routeStr = fmt.Sprintf("%s⚡ SmartNet%s %s(%s)%s", Magenta, Reset, Dim, r.Resolved, Reset)
 		} else if rules.ShouldBypass(r.Domain, nil, nil) {
 			routeStr = fmt.Sprintf("%s⚡ Direct/Split%s %s(%s)%s", Green, Reset, Dim, r.Resolved, Reset)
 		} else if r.Resolved == "FAIL" || r.Resolved == "" {
