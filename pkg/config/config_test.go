@@ -135,9 +135,10 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 
 	_ = cfg.AddProfile(&Profile{
-		Name:     "custom",
-		Upstream: "https://doh.custom.net/dns-query",
-		Desc:     "Custom profile",
+		Name:           "custom",
+		Upstream:       "https://doh.custom.net/dns-query",
+		BackupUpstream: "https://1.1.1.1/dns-query",
+		Desc:           "Custom profile",
 	})
 	_ = cfg.SetActive("custom")
 	cfg.ListenAddr = "127.0.0.1:5353"
@@ -161,6 +162,9 @@ func TestSaveAndLoad(t *testing.T) {
 	p := loadedCfg.GetActive()
 	if p == nil || p.Upstream != "https://doh.custom.net/dns-query" {
 		t.Errorf("expected loaded active profile upstream 'https://doh.custom.net/dns-query', got %v", p)
+	}
+	if p == nil || p.BackupUpstream != "https://1.1.1.1/dns-query" {
+		t.Errorf("expected loaded backup upstream 'https://1.1.1.1/dns-query', got %v", p)
 	}
 	if loadedCfg.GetPath() != configPath {
 		t.Errorf("expected path %q, got %q", configPath, loadedCfg.GetPath())

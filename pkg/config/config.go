@@ -9,10 +9,11 @@ import (
 )
 
 type Profile struct {
-	Name      string   `json:"name"`
-	Upstream  string   `json:"upstream"`
-	Bootstrap []string `json:"bootstrap,omitempty"`
-	Desc      string   `json:"description,omitempty"`
+	Name           string   `json:"name"`
+	Upstream       string   `json:"upstream"`
+	BackupUpstream string   `json:"backup_upstream,omitempty"`
+	Bootstrap      []string `json:"bootstrap,omitempty"`
+	Desc           string   `json:"description,omitempty"`
 }
 
 type Config struct {

@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"smartdns/pkg/completion"
 	"smartdns/pkg/config"
 	"smartdns/pkg/network"
 	"smartdns/pkg/resolver"
@@ -24,7 +25,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.3.0"
+const Version = "1.4.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -36,14 +37,15 @@ func printHelp() {
   %son%s [profile]      Enable SmartDNS on the active network interface
   %soff%s              Disable SmartDNS (revert to default DHCP)
   %stoggle%s           Toggle state (enable / disable)
-  %sstatus%s           Show service, network interface, and DNS status
-  %stest%s [domains...] Test latency and routing to domains
+  %sstatus%s           Show service, network interface, egress IP, and DNS status
+  %stest%s [domains...] Test latency, TLS ping, and routing to domains
   %supdate%s           Update SmartDNS to latest version from GitHub
+  %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash)
 
 %sPROFILE MANAGEMENT:%s
   %slist%s             List all configured DNS profiles
   %suse%s <name>        Switch active DNS profile
-  %sadd%s <name> <url>  Add a new DoH profile
+  %sadd%s <name> <url> [backup]  Add a new DoH profile (with optional secondary DoH)
   %sremove%s <name>     Remove a DNS profile
 
 %sQUICK SETUP ON A NEW PC:%s
@@ -58,7 +60,7 @@ func printHelp() {
   smartdns setup https://dns.example.com/dns-query personal
   smartdns on
   smartdns test
-  smartdns update
+  smartdns completion fish > ~/.config/fish/completions/smartdns.fish
   smartdns off
 `,
 		tester.Bold, Version, tester.Reset,
@@ -66,6 +68,7 @@ func printHelp() {
 		tester.Bold, tester.Reset,
 		tester.Green, tester.Reset,
 		tester.Yellow, tester.Reset,
+		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
@@ -138,6 +141,9 @@ func main() {
 
 	case "update", "upgrade":
 		handleUpdate()
+
+	case "completion":
+		handleCompletion()
 
 	default:
 		fmt.Printf("%sUnknown command: %s%s\n\n", tester.Red, cmd, tester.Reset)
@@ -268,7 +274,10 @@ func handleStatus() {
 	active := cfg.GetActive()
 	if active != nil {
 		fmt.Printf(" Active profile                  : %s%s%s\n", tester.Cyan, active.Name, tester.Reset)
-		fmt.Printf(" Upstream DoH URL                : %s\n", active.Upstream)
+		fmt.Printf(" Primary DoH URL                 : %s\n", active.Upstream)
+		if active.BackupUpstream != "" {
+			fmt.Printf(" Secondary (Backup) DoH          : %s%s%s\n", tester.Yellow, active.BackupUpstream, tester.Reset)
+		}
 		if active.Desc != "" {
 			fmt.Printf(" Description                     : %s%s%s\n", tester.Dim, active.Desc, tester.Reset)
 		}
@@ -283,6 +292,11 @@ func handleStatus() {
 		fallbacks = append([]string{gw + " (Gateway)"}, fallbacks...)
 	}
 	fmt.Printf(" Auto-Fallback Protection        : %s● Active%s (%s)\n", tester.Green, tester.Reset, strings.Join(fallbacks, ", "))
+
+	// 5. Public Egress IP
+	if pubIP, err := network.GetPublicIP(); err == nil && pubIP != nil {
+		fmt.Printf(" Public Egress IP                : %s● %s%s\n", tester.Cyan, pubIP.String(), tester.Reset)
+	}
 
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
 	fmt.Printf(" Total profiles: %d (use %ssmartdns list%s)\n\n", len(cfg.Profiles), tester.Cyan, tester.Reset)
@@ -320,8 +334,15 @@ func handleTest() {
 		resStatus = fmt.Sprintf("%s● Active%s (profile: %s%s%s)", tester.Green, tester.Reset, tester.Cyan, cfg.ActiveProfile, tester.Reset)
 	}
 
+	pubIP, _ := network.GetPublicIP()
+	egressStr := fmt.Sprintf("%sDetecting...%s", tester.Dim, tester.Reset)
+	if pubIP != nil {
+		egressStr = fmt.Sprintf("%s● %s%s", tester.Cyan, pubIP.String(), tester.Reset)
+	}
+
 	fmt.Printf(" Local resolver (127.0.0.1:53) : %s\n", resStatus)
 	fmt.Printf(" System DNS (%-18s) : %s\n", iface, sysStatus)
+	fmt.Printf(" Public Egress IP              : %s\n", egressStr)
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────────────────" + tester.Reset)
 	fmt.Println()
 
@@ -351,6 +372,9 @@ func handleList() {
 			nameColor = tester.Bold + tester.Green
 		}
 		fmt.Printf("%s%-14s %s\n", indicator, nameColor+name+tester.Reset, p.Upstream)
+		if p.BackupUpstream != "" {
+			fmt.Printf("    %sBackup:   %s%s\n", tester.Dim, p.BackupUpstream, tester.Reset)
+		}
 		if p.Desc != "" {
 			fmt.Printf("    %s%s%s\n", tester.Dim, p.Desc, tester.Reset)
 		}
@@ -389,15 +413,30 @@ func handleUse() {
 
 func handleAdd() {
 	if len(os.Args) < 4 {
-		fmt.Printf("%sUsage: smartdns add <name> <upstream_url> [description]%s\n", tester.Yellow, tester.Reset)
+		fmt.Printf(`%sUsage: smartdns add <name> <upstream_url> [backup_url] [description]%s
+
+Examples:
+  smartdns add personal https://dns.example.com/dns-query
+  smartdns add personal https://dns.example.com/dns-query https://1.1.1.1/dns-query "With Cloudflare backup"
+`, tester.Yellow, tester.Reset)
 		os.Exit(1)
 	}
 
 	name := os.Args[2]
 	upstream := os.Args[3]
+	backup := ""
 	desc := ""
+
 	if len(os.Args) > 4 {
-		desc = strings.Join(os.Args[4:], " ")
+		arg4 := os.Args[4]
+		if strings.HasPrefix(arg4, "http://") || strings.HasPrefix(arg4, "https://") {
+			backup = arg4
+			if len(os.Args) > 5 {
+				desc = strings.Join(os.Args[5:], " ")
+			}
+		} else {
+			desc = strings.Join(os.Args[4:], " ")
+		}
 	}
 
 	cfg, err := config.Load()
@@ -407,9 +446,10 @@ func handleAdd() {
 	}
 
 	p := &config.Profile{
-		Name:     name,
-		Upstream: upstream,
-		Desc:     desc,
+		Name:           name,
+		Upstream:       upstream,
+		BackupUpstream: backup,
+		Desc:           desc,
 	}
 
 	if err := cfg.AddProfile(p); err != nil {
@@ -693,4 +733,34 @@ func handleUpdate() {
 		fmt.Printf("%s✓ Service reloaded with the new version.%s\n", tester.Green, tester.Reset)
 	}
 }
+
+func handleCompletion() {
+	if len(os.Args) < 3 {
+		fmt.Printf(`%sUsage: smartdns completion <fish|zsh|bash>%s
+
+Setup instructions:
+  # Fish (macOS / Linux):
+  smartdns completion fish > ~/.config/fish/completions/smartdns.fish
+
+  # Zsh (macOS / Linux):
+  mkdir -p ~/.zsh/completion
+  smartdns completion zsh > ~/.zsh/completion/_smartdns
+  # Ensure 'fpath=(~/.zsh/completion $fpath)' is in ~/.zshrc
+
+  # Bash (Linux):
+  smartdns completion bash | sudo tee /etc/bash_completion.d/smartdns >/dev/null
+`, tester.Yellow, tester.Reset)
+		os.Exit(1)
+	}
+
+	sh := os.Args[2]
+	script, err := completion.Generate(sh)
+	if err != nil {
+		fmt.Printf("%sError: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	fmt.Print(script)
+}
+
 

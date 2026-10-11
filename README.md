@@ -64,9 +64,10 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 | `smartdns on [profile]` | Enable SmartDNS on the active network interface (sets system DNS to `127.0.0.1`) |
 | `smartdns off` | Disable SmartDNS (reverts system DNS to standard DHCP) |
 | `smartdns toggle` | Toggle DNS state (on / off) |
-| `smartdns status` | Show detailed status of service, active interface, and DNS |
-| `smartdns test [domains...]` | Test DNS resolution speed, TLS ping, and HTTP status codes |
+| `smartdns status` | Show detailed status of service, active interface, egress IP, and DNS |
+| `smartdns test [domains...]` | Test DNS resolution speed, TLS ping, HTTP status codes, and egress IP |
 | `smartdns update` | Update SmartDNS to the latest release from GitHub |
+| `smartdns completion <shell>` | Generate shell completion script (`fish`, `zsh`, `bash`) |
 
 ---
 
@@ -76,12 +77,13 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 | :--- | :--- |
 | `smartdns list` | List all configured profiles and show the active one |
 | `smartdns use <name>` | Switch active upstream DNS server |
-| `smartdns add <name> <url> [description]` | Add a new DoH upstream server |
+| `smartdns add <name> <url> [backup] [desc]` | Add a new DoH upstream server (with optional secondary backup DoH) |
 | `smartdns remove <name>` | Remove a profile |
 
 ### Examples:
 * `smartdns setup https://your-server.com/dns-query personal`
-* `smartdns add custom https://dns.example.com/dns-query "Secondary DoH server"`
+* `smartdns add custom https://dns.example.com/dns-query https://1.1.1.1/dns-query "Primary + Cloudflare backup"`
+* `smartdns completion fish > ~/.config/fish/completions/smartdns.fish`
 
 ---
 

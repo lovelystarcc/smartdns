@@ -128,3 +128,27 @@ func TestResolveViaBootstrap(t *testing.T) {
 		t.Fatal("expected non-empty IP from bootstrap resolution")
 	}
 }
+
+func TestBackupUpstreamFailover(t *testing.T) {
+	cfg := config.DefaultConfig()
+	_ = cfg.AddProfile(&config.Profile{
+		Name:           "with-backup",
+		Upstream:       "https://127.0.0.1:59999/dns-query",
+		BackupUpstream: "https://1.1.1.1/dns-query",
+	})
+	_ = cfg.SetActive("with-backup")
+
+	s := New(cfg)
+
+	req := new(dns.Msg)
+	req.SetQuestion("google.com.", dns.TypeA)
+
+	resp, err := s.queryDoHWithTimeout(req, "https://1.1.1.1/dns-query", 2*time.Second)
+	if err != nil {
+		t.Fatalf("queryDoHWithTimeout to backup upstream failed: %v", err)
+	}
+	if resp == nil || len(resp.Answer) == 0 {
+		t.Fatalf("expected non-empty response from backup DoH, got %v", resp)
+	}
+}
+

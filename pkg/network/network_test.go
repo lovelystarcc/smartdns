@@ -39,3 +39,14 @@ func TestActiveInterface(t *testing.T) {
 		t.Fatal("expected non-empty active interface name")
 	}
 }
+
+func TestGetPublicIP(t *testing.T) {
+	info, err := GetPublicIP()
+	if err != nil {
+		t.Logf("GetPublicIP returned error (might be offline): %v", err)
+		return
+	}
+	if info == nil || info.IP == "" {
+		t.Errorf("expected non-empty IP, got %v", info)
+	}
+}

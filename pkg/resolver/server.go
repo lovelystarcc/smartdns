@@ -497,28 +497,45 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 		// Normal path: Query Primary DoH with a 2.5s timeout
 		resp, err = s.queryDoHWithTimeout(r, active.Upstream, 2500*time.Millisecond)
 		if err != nil {
-			log.Printf("[smartdns] ⚠️ Upstream DoH error for %s (%v). Failing over to fallback DNS...", q.Name, err)
+			log.Printf("[smartdns] ⚠️ Upstream DoH error for %s (%v).", q.Name, err)
 			s.recordFailure(active.Upstream)
 
-			// Instant failover to parallel fallback
-			resp, err = s.queryFallback(r)
-			usedFallback = true
-			if err != nil {
-				log.Printf("[smartdns] ❌ Fallback also failed for %s: %v", q.Name, err)
-				dns.HandleFailed(w, r)
-				return
+			// Try secondary DoH if configured
+			if active.BackupUpstream != "" {
+				backupResp, backupErr := s.queryDoHWithTimeout(r, active.BackupUpstream, 2000*time.Millisecond)
+				if backupErr == nil && backupResp != nil {
+					resp = backupResp
+				}
+			}
+
+			// If secondary DoH also failed or wasn't configured, failover to parallel fallback
+			if resp == nil {
+				resp, err = s.queryFallback(r)
+				usedFallback = true
+				if err != nil {
+					log.Printf("[smartdns] ❌ Fallback also failed for %s: %v", q.Name, err)
+					dns.HandleFailed(w, r)
+					return
+				}
 			}
 		} else {
 			s.recordSuccess(active.Upstream)
 		}
 	} else {
-		// Circuit breaker tripped or no profile: go straight to fallback to avoid timeout latency
-		resp, err = s.queryFallback(r)
-		usedFallback = true
-		if err != nil {
-			log.Printf("[smartdns] ❌ Fallback query failed for %s: %v", q.Name, err)
-			dns.HandleFailed(w, r)
-			return
+		// Circuit breaker tripped or no primary profile:
+		// Try backup DoH if available before falling back to unencrypted DNS
+		if active != nil && active.BackupUpstream != "" {
+			resp, _ = s.queryDoHWithTimeout(r, active.BackupUpstream, 1500*time.Millisecond)
+		}
+		if resp == nil {
+			// Go straight to fallback to avoid timeout latency
+			resp, err = s.queryFallback(r)
+			usedFallback = true
+			if err != nil {
+				log.Printf("[smartdns] ❌ Fallback query failed for %s: %v", q.Name, err)
+				dns.HandleFailed(w, r)
+				return
+			}
 		}
 	}
 
