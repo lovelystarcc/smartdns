@@ -3,7 +3,12 @@ package vless
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -13,6 +18,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
+	"golang.org/x/crypto/hkdf"
 
 	"smartnet/pkg/config"
 )
@@ -92,15 +100,24 @@ func (d *Dialer) DialContext(ctx context.Context, network, target string) (net.C
 		return nil, fmt.Errorf("failed to connect to VLESS server %s: %w", serverAddr, err)
 	}
 
-	// TLS / Reality handshake
-	tlsConfig := &tls.Config{
-		ServerName:         d.cfg.ServerName,
-		InsecureSkipVerify: true, // Reality SNI targets a disguised third-party host (e.g. apple.com)
-	}
-	tlsConn := tls.Client(rawConn, tlsConfig)
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		_ = rawConn.Close()
-		return nil, fmt.Errorf("VLESS TLS/Reality handshake failed with %s: %w", d.cfg.ServerName, err)
+	var tlsConn net.Conn
+	if d.cfg.PublicKey != "" {
+		tlsConn, err = realityHandshake(ctx, rawConn, d.cfg)
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
+		}
+	} else {
+		tlsConfig := &tls.Config{
+			ServerName:         d.cfg.ServerName,
+			InsecureSkipVerify: true,
+		}
+		stdConn := tls.Client(rawConn, tlsConfig)
+		if err := stdConn.HandshakeContext(ctx); err != nil {
+			_ = rawConn.Close()
+			return nil, fmt.Errorf("VLESS TLS handshake failed with %s: %w", d.cfg.ServerName, err)
+		}
+		tlsConn = stdConn
 	}
 
 	// Build and send VLESS request header
@@ -199,3 +216,79 @@ func buildRequestHeader(uuidStr string, cmd byte, target string) ([]byte, error)
 
 	return buf.Bytes(), nil
 }
+
+func realityHandshake(ctx context.Context, rawConn net.Conn, cfg *config.VLESSConfig) (net.Conn, error) {
+	pubKeyBytes, err := base64.RawURLEncoding.DecodeString(cfg.PublicKey)
+	if err != nil {
+		pubKeyBytes, err = base64.URLEncoding.DecodeString(cfg.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("invalid reality public key base64: %w", err)
+		}
+	}
+
+	var shortIDBytes []byte
+	if cfg.ShortID != "" {
+		shortIDBytes, err = hex.DecodeString(cfg.ShortID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid reality short_id hex: %w", err)
+		}
+	}
+
+	uConn := utls.UClient(rawConn, &utls.Config{
+		ServerName:             cfg.ServerName,
+		InsecureSkipVerify:     true,
+		SessionTicketsDisabled: true,
+	}, utls.HelloChrome_Auto)
+
+	if err := uConn.BuildHandshakeState(); err != nil {
+		return nil, fmt.Errorf("failed to build uTLS handshake state: %w", err)
+	}
+
+	hello := uConn.HandshakeState.Hello
+	sessionID := make([]byte, 32)
+	binary.BigEndian.PutUint32(sessionID[4:], uint32(time.Now().Unix()))
+	if len(shortIDBytes) > 0 {
+		copy(sessionID[8:], shortIDBytes)
+	}
+
+	publicKey, err := ecdh.X25519().NewPublicKey(pubKeyBytes)
+	if err != nil {
+		return nil, fmt.Errorf("invalid x25519 public key: %w", err)
+	}
+
+	ecdhe := uConn.HandshakeState.State13.KeyShareKeys.Ecdhe
+	if ecdhe == nil {
+		return nil, fmt.Errorf("ecdhe keys not found in TLS 1.3 ClientHello")
+	}
+
+	sharedKey, err := ecdhe.ECDH(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("reality ECDH exchange failed: %w", err)
+	}
+
+	authKey := make([]byte, 32)
+	if _, err := hkdf.New(sha256.New, sharedKey, hello.Random[:20], []byte("REALITY")).Read(authKey); err != nil {
+		return nil, fmt.Errorf("reality HKDF key derivation failed: %w", err)
+	}
+
+	block, err := aes.NewCipher(authKey)
+	if err != nil {
+		return nil, fmt.Errorf("reality AES cipher init failed: %w", err)
+	}
+
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("reality GCM init failed: %w", err)
+	}
+
+	aead.Seal(sessionID[:0], hello.Random[20:], sessionID[:16], hello.Raw)
+	copy(hello.SessionId, sessionID)
+	copy(hello.Raw[39:], sessionID)
+
+	if err := uConn.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("reality TLS handshake failed with %s: %w", cfg.ServerName, err)
+	}
+
+	return uConn, nil
+}
+
