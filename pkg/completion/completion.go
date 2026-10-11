@@ -25,7 +25,7 @@ function __smartdns_domains
     echo "google.com"
 end
 
-set -l commands on off toggle status test list use add remove setup service daemon update completion version help
+set -l commands on off toggle status test list use add remove setup service daemon update completion run env proxy version help
 
 complete -c smartdns -f
 
@@ -44,6 +44,9 @@ complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a service -
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a daemon -d "Run DNS server in foreground"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a update -d "Update SmartDNS to latest version"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a completion -d "Generate shell auto-completion script"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a run -d "Run command with proxy environment injected"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a env -d "Output proxy environment exports for shell"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a proxy -d "Manage local Mixed HTTP/SOCKS5 proxy bridge"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a version -d "Show version"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a help -d "Show help"
 
@@ -52,6 +55,8 @@ complete -c smartdns -n "__fish_seen_subcommand_from use remove" -a "(__smartdns
 complete -c smartdns -n "__fish_seen_subcommand_from on" -a "(__smartdns_profiles)" -d "Profile"
 complete -c smartdns -n "__fish_seen_subcommand_from test" -a "(__smartdns_domains)" -d "Domain"
 complete -c smartdns -n "__fish_seen_subcommand_from service" -a "install uninstall start stop restart status"
+complete -c smartdns -n "__fish_seen_subcommand_from proxy" -a "status run set"
+complete -c smartdns -n "__fish_seen_subcommand_from env" -a "fish zsh bash"
 complete -c smartdns -n "__fish_seen_subcommand_from completion" -a "fish zsh bash"
 `
 
@@ -63,7 +68,7 @@ _smartdns_completions() {
     local cur prev commands
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="on off toggle status test list use add remove setup service daemon update completion version help"
+    commands="on off toggle status test list use add remove setup service daemon update completion run env proxy version help"
 
     case "$prev" in
         smartdns)
@@ -79,7 +84,11 @@ _smartdns_completions() {
             COMPREPLY=($(compgen -W "install uninstall start stop restart status" -- "$cur"))
             return 0
             ;;
-        completion)
+        proxy)
+            COMPREPLY=($(compgen -W "status run set" -- "$cur"))
+            return 0
+            ;;
+        env|completion)
             COMPREPLY=($(compgen -W "fish zsh bash" -- "$cur"))
             return 0
             ;;
@@ -114,6 +123,9 @@ _smartdns() {
         'daemon:Run DNS server in foreground'
         'update:Update SmartDNS to latest version'
         'completion:Generate shell auto-completion script'
+        'run:Run command with proxy environment injected'
+        'env:Output proxy environment exports for shell'
+        'proxy:Manage local Mixed HTTP/SOCKS5 proxy bridge'
         'version:Show version'
         'help:Show help'
     )
@@ -135,7 +147,10 @@ _smartdns() {
                 service)
                     _values 'service commands' install uninstall start stop restart status
                     ;;
-                completion)
+                proxy)
+                    _values 'proxy commands' status run set
+                    ;;
+                env|completion)
                     _values 'shell' fish zsh bash
                     ;;
                 test)

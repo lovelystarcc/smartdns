@@ -71,6 +71,34 @@ GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/smartdns-linux-arm64 .
 
 ---
 
+## 🛠 Developer Tools & Proxy Bridge
+
+SmartDNS includes a built-in local Mixed HTTP/SOCKS5 proxy bridge (`127.0.0.1:7890`) for seamless terminal and developer workflows:
+
+| Command | Description |
+| :--- | :--- |
+| `smartdns run [--] <cmd...>` | Execute any CLI command with proxy environment injected (`curl`, `git`, `brew`) |
+| `smartdns env [fish\|zsh]` | Output shell export commands (`HTTP_PROXY`, `ALL_PROXY`) for current session |
+| `smartdns env -u` | Output unset commands to clear proxy environment in current session |
+| `smartdns proxy status` | Show status of the local Mixed HTTP/SOCKS5 listener |
+| `smartdns proxy run` | Run standalone proxy bridge in foreground (for debugging) |
+| `smartdns proxy set <url>` | Configure upstream proxy for active profile (e.g. `socks5://vps:1080`) |
+
+### Examples:
+```bash
+# Run command through the proxy bridge:
+smartdns run -- git clone https://github.com/lovelystarcc/smartdns
+smartdns run -- curl -I https://blocked-site.com
+
+# Enable proxy in current Fish terminal session:
+eval (smartdns env)
+
+# Enable proxy in current Zsh / Bash session:
+eval $(smartdns env zsh)
+```
+
+---
+
 ## 🎛 Profile Management
 
 | Command | Description |

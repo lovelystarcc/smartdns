@@ -18,6 +18,7 @@ import (
 	"smartdns/pkg/completion"
 	"smartdns/pkg/config"
 	"smartdns/pkg/network"
+	"smartdns/pkg/proxy"
 	"smartdns/pkg/resolver"
 	"smartdns/pkg/service"
 	"smartdns/pkg/tester"
@@ -25,7 +26,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "1.4.0"
+const Version = "1.5.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -42,6 +43,11 @@ func printHelp() {
   %supdate%s           Update SmartDNS to latest version from GitHub
   %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash)
 
+%sDEVELOPER TOOLS & PROXY BRIDGE:%s
+  %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
+  %senv%s [fish|zsh]   Output shell export commands for proxy (use with eval)
+  %sproxy%s status|run Manage local Mixed HTTP/SOCKS5 proxy bridge (127.0.0.1:7890)
+
 %sPROFILE MANAGEMENT:%s
   %slist%s             List all configured DNS profiles
   %suse%s <name>        Switch active DNS profile
@@ -54,13 +60,14 @@ func printHelp() {
 %sSYSTEM DAEMON:%s
   %sservice%s install  Install background service into startup (launchd / systemd)
   %sservice%s start|stop|restart|status|uninstall
-  %sdaemon%s           Run DNS server in console (foreground)
+  %sdaemon%s           Run DNS server and proxy bridge in console (foreground)
 
 %sEXAMPLES:%s
   smartdns setup https://dns.example.com/dns-query personal
   smartdns on
+  smartdns run -- curl -I https://blocked-site.com
+  eval (smartdns env)  # (fish) enable proxy in current terminal session
   smartdns test
-  smartdns completion fish > ~/.config/fish/completions/smartdns.fish
   smartdns off
 `,
 		tester.Bold, Version, tester.Reset,
@@ -71,6 +78,10 @@ func printHelp() {
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
+		tester.Cyan, tester.Reset,
+		tester.Cyan, tester.Reset,
+		tester.Bold, tester.Reset,
+		tester.Green, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
@@ -136,8 +147,17 @@ func main() {
 	case "service":
 		handleService()
 
-	case "daemon", "run":
+	case "daemon":
 		handleDaemon()
+
+	case "proxy":
+		handleProxy()
+
+	case "run":
+		handleRun()
+
+	case "env":
+		handleEnv()
 
 	case "update", "upgrade":
 		handleUpdate()
@@ -257,7 +277,20 @@ func handleStatus() {
 	}
 	fmt.Printf(" Resolver service (127.0.0.1:53) : %s\n", serviceStr)
 
-	// 2. Active network interface & DNS
+	// 2. Proxy bridge status
+	proxyAddr := cfg.ProxyAddr
+	if proxyAddr == "" {
+		proxyAddr = "127.0.0.1:7890"
+	}
+	proxyStr := ""
+	if proxy.IsListening(proxyAddr) {
+		proxyStr = fmt.Sprintf("%s● Active%s (%s, Mixed HTTP/SOCKS5)", tester.Green, tester.Reset, proxyAddr)
+	} else {
+		proxyStr = fmt.Sprintf("%s● Stopped%s (%s)", tester.Yellow, tester.Reset, proxyAddr)
+	}
+	fmt.Printf(" Proxy bridge (%-17s) : %s\n", proxyAddr, proxyStr)
+
+	// 3. Active network interface & DNS
 	iface, _ := network.ActiveInterface()
 	servers, _ := network.GetDNSServers(iface)
 	dnsSet := service.IsSystemDNSSet(iface)
@@ -270,13 +303,16 @@ func handleStatus() {
 	}
 	fmt.Printf(" System DNS (%-20s) : %s\n", iface, statusStr)
 
-	// 3. Active Profile
+	// 4. Active Profile
 	active := cfg.GetActive()
 	if active != nil {
 		fmt.Printf(" Active profile                  : %s%s%s\n", tester.Cyan, active.Name, tester.Reset)
 		fmt.Printf(" Primary DoH URL                 : %s\n", active.Upstream)
 		if active.BackupUpstream != "" {
 			fmt.Printf(" Secondary (Backup) DoH          : %s%s%s\n", tester.Yellow, active.BackupUpstream, tester.Reset)
+		}
+		if active.ProxyUpstream != "" {
+			fmt.Printf(" Proxy Upstream                  : %s%s%s\n", tester.Cyan, active.ProxyUpstream, tester.Reset)
 		}
 		if active.Desc != "" {
 			fmt.Printf(" Description                     : %s%s%s\n", tester.Dim, active.Desc, tester.Reset)
@@ -285,7 +321,7 @@ func handleStatus() {
 		fmt.Printf(" Active profile                  : %sNot configured%s (run: smartdns setup <url>)\n", tester.Yellow, tester.Reset)
 	}
 
-	// 4. Auto-Fallback Protection
+	// 5. Auto-Fallback Protection
 	gw := network.GetPhysicalGateway()
 	fallbacks := []string{"1.1.1.1", "8.8.8.8", "77.88.8.8"}
 	if gw != "" {
@@ -293,7 +329,7 @@ func handleStatus() {
 	}
 	fmt.Printf(" Auto-Fallback Protection        : %s● Active%s (%s)\n", tester.Green, tester.Reset, strings.Join(fallbacks, ", "))
 
-	// 5. Public Egress IP
+	// 6. Public Egress IP
 	if pubIP, err := network.GetPublicIP(); err == nil && pubIP != nil {
 		fmt.Printf(" Public Egress IP                : %s● %s%s\n", tester.Cyan, pubIP.String(), tester.Reset)
 	}
@@ -635,6 +671,11 @@ func handleDaemon() {
 		log.Fatalf("Failed to start DNS server: %v", err)
 	}
 
+	proxySrv := proxy.New(cfg)
+	if err := proxySrv.Start(); err != nil {
+		log.Printf("[smartdns] Warning: Failed to start proxy bridge: %v", err)
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -645,14 +686,188 @@ func handleDaemon() {
 			if err == nil {
 				cfg = newCfg
 				srv.Stop()
+				proxySrv.Stop()
 				srv = resolver.New(cfg)
+				proxySrv = proxy.New(cfg)
 				_ = srv.Start()
+				_ = proxySrv.Start()
 			}
 			continue
 		}
 		log.Println("[smartdns] Shutting down...")
 		srv.Stop()
+		proxySrv.Stop()
 		break
+	}
+}
+
+func handleRun() {
+	if len(os.Args) < 3 {
+		fmt.Printf(`%sUsage: smartdns run [--] <command> [args...]%s
+
+Examples:
+  smartdns run -- git clone https://github.com/...
+  smartdns run -- curl -I https://blocked-site.com
+  smartdns run brew update
+`, tester.Yellow, tester.Reset)
+		os.Exit(1)
+	}
+
+	args := os.Args[2:]
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
+		fmt.Printf("%sNo command specified to run%s\n", tester.Red, tester.Reset)
+		os.Exit(1)
+	}
+
+	cfg, _ := config.Load()
+	proxyAddr := "127.0.0.1:7890"
+	if cfg != nil && cfg.ProxyAddr != "" {
+		proxyAddr = cfg.ProxyAddr
+	}
+
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	env := os.Environ()
+	env = append(env,
+		fmt.Sprintf("HTTP_PROXY=http://%s", proxyAddr),
+		fmt.Sprintf("HTTPS_PROXY=http://%s", proxyAddr),
+		fmt.Sprintf("ALL_PROXY=socks5://%s", proxyAddr),
+		fmt.Sprintf("http_proxy=http://%s", proxyAddr),
+		fmt.Sprintf("https_proxy=http://%s", proxyAddr),
+		fmt.Sprintf("all_proxy=socks5://%s", proxyAddr),
+	)
+	cmd.Env = env
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		fmt.Printf("%sCommand failed: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+}
+
+func handleEnv() {
+	cfg, _ := config.Load()
+	proxyAddr := "127.0.0.1:7890"
+	if cfg != nil && cfg.ProxyAddr != "" {
+		proxyAddr = cfg.ProxyAddr
+	}
+	httpURL := "http://" + proxyAddr
+	socksURL := "socks5://" + proxyAddr
+
+	isUnset := false
+	sh := ""
+	for _, arg := range os.Args[2:] {
+		if arg == "-u" || arg == "--unset" {
+			isUnset = true
+		} else if !strings.HasPrefix(arg, "-") {
+			sh = strings.ToLower(arg)
+		}
+	}
+
+	if sh == "" {
+		shellEnv := os.Getenv("SHELL")
+		if strings.Contains(shellEnv, "fish") {
+			sh = "fish"
+		} else {
+			sh = "zsh"
+		}
+	}
+
+	if isUnset {
+		if sh == "fish" {
+			fmt.Println("set -e HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy")
+		} else {
+			fmt.Println("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy")
+		}
+		return
+	}
+
+	if sh == "fish" {
+		fmt.Printf("set -gx HTTP_PROXY %s\n", httpURL)
+		fmt.Printf("set -gx HTTPS_PROXY %s\n", httpURL)
+		fmt.Printf("set -gx ALL_PROXY %s\n", socksURL)
+		fmt.Printf("set -gx http_proxy %s\n", httpURL)
+		fmt.Printf("set -gx https_proxy %s\n", httpURL)
+		fmt.Printf("set -gx all_proxy %s\n", socksURL)
+	} else {
+		fmt.Printf("export HTTP_PROXY=\"%s\"\n", httpURL)
+		fmt.Printf("export HTTPS_PROXY=\"%s\"\n", httpURL)
+		fmt.Printf("export ALL_PROXY=\"%s\"\n", socksURL)
+		fmt.Printf("export http_proxy=\"%s\"\n", httpURL)
+		fmt.Printf("export https_proxy=\"%s\"\n", httpURL)
+		fmt.Printf("export all_proxy=\"%s\"\n", socksURL)
+	}
+}
+
+func handleProxy() {
+	cfg, _ := config.Load()
+	proxyAddr := "127.0.0.1:7890"
+	if cfg != nil && cfg.ProxyAddr != "" {
+		proxyAddr = cfg.ProxyAddr
+	}
+
+	if len(os.Args) < 3 {
+		active := proxy.IsListening(proxyAddr)
+		statusStr := fmt.Sprintf("%s● Inactive%s", tester.Yellow, tester.Reset)
+		if active {
+			statusStr = fmt.Sprintf("%s● Active%s", tester.Green, tester.Reset)
+		}
+		fmt.Printf("\n%sSmartDNS Proxy Bridge%s\n", tester.Bold, tester.Reset)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf(" Local listener  : %s (%s, Mixed HTTP/SOCKS5)\n", proxyAddr, statusStr)
+		if cfg != nil && cfg.GetActive() != nil && cfg.GetActive().ProxyUpstream != "" {
+			fmt.Printf(" Proxy upstream  : %s\n", cfg.GetActive().ProxyUpstream)
+		} else {
+			fmt.Printf(" Proxy upstream  : Direct dial via SmartDNS\n")
+		}
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf("Usage:\n  smartdns proxy status\n  smartdns proxy run\n  smartdns proxy set <upstream_url>\n\n")
+		return
+	}
+
+	action := strings.ToLower(os.Args[2])
+	switch action {
+	case "status":
+		if proxy.IsListening(proxyAddr) {
+			fmt.Printf("%s● Proxy bridge active on %s (Mixed HTTP/SOCKS5)%s\n", tester.Green, proxyAddr, tester.Reset)
+		} else {
+			fmt.Printf("%s● Proxy bridge inactive on %s%s\n", tester.Yellow, proxyAddr, tester.Reset)
+		}
+	case "run":
+		srv := proxy.New(cfg)
+		if err := srv.Start(); err != nil {
+			log.Fatalf("Failed to start proxy bridge: %v", err)
+		}
+		log.Printf("[smartdns] Running standalone proxy bridge on %s. Press Ctrl+C to stop.", proxyAddr)
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		srv.Stop()
+	case "set":
+		if len(os.Args) < 4 {
+			fmt.Printf("%sUsage: smartdns proxy set <upstream_url>%s (e.g. socks5://1.2.3.4:1080)\n", tester.Yellow, tester.Reset)
+			os.Exit(1)
+		}
+		active := cfg.GetActive()
+		if active == nil {
+			fmt.Printf("%sNo active profile configured%s\n", tester.Red, tester.Reset)
+			os.Exit(1)
+		}
+		active.ProxyUpstream = os.Args[3]
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ Active profile '%s' proxy upstream set to %s%s\n", tester.Green, active.Name, os.Args[3], tester.Reset)
+	default:
+		fmt.Printf("%sUnknown proxy action: %s%s\n", tester.Red, action, tester.Reset)
+		os.Exit(1)
 	}
 }
 

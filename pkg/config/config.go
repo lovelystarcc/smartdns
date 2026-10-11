@@ -12,6 +12,7 @@ type Profile struct {
 	Name           string   `json:"name"`
 	Upstream       string   `json:"upstream"`
 	BackupUpstream string   `json:"backup_upstream,omitempty"`
+	ProxyUpstream  string   `json:"proxy_upstream,omitempty"`
 	Bootstrap      []string `json:"bootstrap,omitempty"`
 	Desc           string   `json:"description,omitempty"`
 }
@@ -19,6 +20,7 @@ type Profile struct {
 type Config struct {
 	ActiveProfile string              `json:"active_profile"`
 	ListenAddr    string              `json:"listen_addr"`
+	ProxyAddr     string              `json:"proxy_addr,omitempty"`
 	Profiles      map[string]*Profile `json:"profiles"`
 	mu            sync.RWMutex        `json:"-"`
 	path          string              `json:"-"`
@@ -28,6 +30,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		ActiveProfile: "",
 		ListenAddr:    "127.0.0.1:53",
+		ProxyAddr:     "127.0.0.1:7890",
 		Profiles:      make(map[string]*Profile),
 	}
 }
@@ -76,6 +79,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1:53"
+	}
+	if cfg.ProxyAddr == "" {
+		cfg.ProxyAddr = "127.0.0.1:7890"
 	}
 	return cfg, nil
 }
