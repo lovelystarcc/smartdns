@@ -101,6 +101,25 @@ SmartDNS v1.7.0 introduces intelligent Split DNS resolution and the Fake-IP engi
 
 ---
 
+## 🌐 Global TUN Adapter (Transparent Proxy)
+
+SmartDNS v1.8.0 introduces native **Virtual TUN Mode** powered by an embedded userspace TCP/IP stack (`golang.zx2c4.com/wireguard/tun` + `gvisor.dev/gvisor` netstack).
+
+When enabled, SmartDNS creates a virtual network interface (`utun` on macOS, `smartdns` on Linux / Windows) and routes the Fake-IP subnet (`198.18.0.0/15`) into the userspace TCP/IP engine. Any application on the operating system—including browsers, CLI utilities, background daemons, and apps without proxy settings—is transparently accelerated without needing `HTTP_PROXY` environment variables or browser extensions.
+
+| Command | Description |
+| :--- | :--- |
+| `smartdns tun on` | Enable Global TUN mode (automatically activates Fake-IP and reloads daemon) |
+| `smartdns tun off` | Disable Global TUN mode |
+| `smartdns tun status` | Check status of the virtual TUN adapter and subnet routing |
+
+### How It Works:
+1. When an application performs a DNS query, SmartDNS assigns a virtual IP from `198.18.0.0/15` (0ms instant response).
+2. The operating system kernel routes packets for `198.18.0.0/15` directly into the SmartDNS TUN adapter.
+3. The userspace gVisor netstack accepts TCP connections, looks up the original target domain in the Fake-IP table, and relays the connection through your upstream proxy.
+
+---
+
 ## 🛠 Developer Tools & Proxy Bridge
 
 SmartDNS includes a built-in local Mixed HTTP/SOCKS5 proxy bridge (`127.0.0.1:7890`) for seamless terminal and developer workflows:

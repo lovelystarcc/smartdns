@@ -20,6 +20,7 @@ type Profile struct {
 	BypassDomains  []string `json:"bypass_domains,omitempty"`
 	ProxyDomains   []string `json:"proxy_domains,omitempty"`
 	FakeIP         bool     `json:"fake_ip,omitempty"`
+	TUN            bool     `json:"tun,omitempty"`
 }
 
 type Config struct {
@@ -187,6 +188,17 @@ func (c *Config) SetFakeIP(name string, enabled bool) error {
 		return fmt.Errorf("profile '%s' not found", name)
 	}
 	p.FakeIP = enabled
+	return nil
+}
+
+func (c *Config) SetTUN(name string, enabled bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	p.TUN = enabled
 	return nil
 }
 

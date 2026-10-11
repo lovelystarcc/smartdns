@@ -25,7 +25,7 @@ function __smartdns_domains
     echo "google.com"
 end
 
-set -l commands on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass version help
+set -l commands on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass tun version help
 
 complete -c smartdns -f
 
@@ -49,6 +49,7 @@ complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a env -d "O
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a proxy -d "Manage local Mixed HTTP/SOCKS5 proxy bridge"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a fakeip -d "Manage zero-latency Fake-IP engine"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a bypass -d "Manage Split DNS direct resolution rules"
+complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a tun -d "Manage Virtual TUN adapter (tun2socks mode)"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a version -d "Show version"
 complete -c smartdns -n "not __fish_seen_subcommand_from $commands" -a help -d "Show help"
 
@@ -60,6 +61,7 @@ complete -c smartdns -n "__fish_seen_subcommand_from service" -a "install uninst
 complete -c smartdns -n "__fish_seen_subcommand_from proxy" -a "status run set"
 complete -c smartdns -n "__fish_seen_subcommand_from fakeip" -a "on off status clear"
 complete -c smartdns -n "__fish_seen_subcommand_from bypass" -a "add remove list"
+complete -c smartdns -n "__fish_seen_subcommand_from tun" -a "on off status"
 complete -c smartdns -n "__fish_seen_subcommand_from env" -a "fish zsh bash powershell"
 complete -c smartdns -n "__fish_seen_subcommand_from completion" -a "fish zsh bash powershell"
 `
@@ -72,7 +74,7 @@ _smartdns_completions() {
     local cur prev commands
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    commands="on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass version help"
+    commands="on off toggle status test list use add remove setup service daemon update completion run env proxy fakeip bypass tun version help"
 
     case "$prev" in
         smartdns)
@@ -98,6 +100,10 @@ _smartdns_completions() {
             ;;
         bypass)
             COMPREPLY=($(compgen -W "add remove list" -- "$cur"))
+            return 0
+            ;;
+        tun)
+            COMPREPLY=($(compgen -W "on off status" -- "$cur"))
             return 0
             ;;
         env|completion)
@@ -140,6 +146,7 @@ _smartdns() {
         'proxy:Manage local Mixed HTTP/SOCKS5 proxy bridge'
         'fakeip:Manage zero-latency Fake-IP engine'
         'bypass:Manage Split DNS direct resolution rules'
+        'tun:Manage Virtual TUN adapter (tun2socks mode)'
         'version:Show version'
         'help:Show help'
     )
@@ -169,6 +176,9 @@ _smartdns() {
                     ;;
                 bypass)
                     _values 'bypass commands' add remove list
+                    ;;
+                tun)
+                    _values 'tun commands' on off status
                     ;;
                 env|completion)
                     _values 'shell' fish zsh bash powershell
@@ -215,6 +225,7 @@ Register-ArgumentCompleter -Native -CommandName smartdns -ScriptBlock {
             [System.Management.Automation.CompletionResult]::new('proxy', 'proxy', 'ParameterValue', 'Manage local Mixed HTTP/SOCKS5 proxy bridge'),
             [System.Management.Automation.CompletionResult]::new('fakeip', 'fakeip', 'ParameterValue', 'Manage zero-latency Fake-IP engine'),
             [System.Management.Automation.CompletionResult]::new('bypass', 'bypass', 'ParameterValue', 'Manage Split DNS direct resolution rules'),
+            [System.Management.Automation.CompletionResult]::new('tun', 'tun', 'ParameterValue', 'Manage Virtual TUN adapter (tun2socks mode)'),
             [System.Management.Automation.CompletionResult]::new('version', 'version', 'ParameterValue', 'Show version'),
             [System.Management.Automation.CompletionResult]::new('help', 'help', 'ParameterValue', 'Show help')
         )
@@ -255,6 +266,12 @@ Register-ArgumentCompleter -Native -CommandName smartdns -ScriptBlock {
             $subs = @('add', 'remove', 'list')
             $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                 [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'Bypass command')
+            }
+        }
+        'tun' {
+            $subs = @('on', 'off', 'status')
+            $subs | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', 'TUN command')
             }
         }
         { $_ -in 'env', 'completion' } {

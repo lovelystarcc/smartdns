@@ -24,11 +24,12 @@ import (
 	"smartdns/pkg/rules"
 	"smartdns/pkg/service"
 	"smartdns/pkg/tester"
+	"smartdns/pkg/tun"
 
 	"github.com/miekg/dns"
 )
 
-const Version = "1.7.0"
+const Version = "1.8.0"
 
 func printHelp() {
 	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
@@ -48,6 +49,7 @@ func printHelp() {
 %sSPLIT DNS & FAKE-IP ENGINE:%s
   %sfakeip%s [on|off|status|clear] Manage zero-latency Fake-IP engine (198.18.0.0/15)
   %sbypass%s [add|remove|list]   Manage direct resolution whitelist (.ru, banks, gov)
+  %stun%s [on|off|status]        Manage Virtual TUN adapter (tun2socks transparent mode)
 
 %sDEVELOPER TOOLS & PROXY BRIDGE:%s
   %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
@@ -66,11 +68,12 @@ func printHelp() {
 %sSYSTEM DAEMON:%s
   %sservice%s install  Install background service into startup (launchd / systemd / schtasks)
   %sservice%s start|stop|restart|status|uninstall
-  %sdaemon%s           Run DNS server and proxy bridge in console (foreground)
+  %sdaemon%s           Run DNS server, proxy bridge, and TUN adapter in foreground
 
 %sEXAMPLES:%s
   smartdns setup https://dns.example.com/dns-query personal
   smartdns on
+  smartdns tun on      # Enable Virtual TUN adapter (global transparent proxy)
   smartdns fakeip on   # Enable 0ms Fake-IP mode
   smartdns bypass add okko.tv
   smartdns run -- curl -I https://blocked-site.com
@@ -88,6 +91,7 @@ func printHelp() {
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
+		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
@@ -177,6 +181,9 @@ func main() {
 
 	case "bypass", "split":
 		handleBypass()
+
+	case "tun":
+		handleTUN()
 
 	case "completion":
 		handleCompletion()
@@ -352,7 +359,14 @@ func handleStatus() {
 	}
 	fmt.Printf(" Fake-IP Engine (198.18.0.0/15)  : %s\n", fakeIPStr)
 
-	// 7. Auto-Fallback Protection
+	// 7. Virtual TUN Adapter
+	tunStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartdns tun on')", tester.Yellow, tester.Reset)
+	if active != nil && active.TUN {
+		tunStr = fmt.Sprintf("%s● Active%s (198.18.0.0/15 -> userspace netstack)", tester.Green, tester.Reset)
+	}
+	fmt.Printf(" Virtual TUN Adapter             : %s\n", tunStr)
+
+	// 8. Auto-Fallback Protection
 	gw := network.GetPhysicalGateway()
 	fallbacks := []string{"1.1.1.1", "8.8.8.8", "77.88.8.8"}
 	if gw != "" {
@@ -707,6 +721,19 @@ func handleDaemon() {
 		log.Printf("[smartdns] Warning: Failed to start proxy bridge: %v", err)
 	}
 
+	var tunStack *tun.Stack
+	if active.TUN {
+		ts, err := tun.NewStack(cfg)
+		if err != nil {
+			log.Printf("[smartdns] Warning: Failed to create TUN adapter: %v", err)
+		} else if err := ts.Start(); err != nil {
+			log.Printf("[smartdns] Warning: Failed to start TUN stack: %v", err)
+		} else {
+			tunStack = ts
+			log.Printf("[smartdns] TUN adapter '%s' active (198.18.0.0/15 -> userspace netstack)", tunStack.DeviceName())
+		}
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -718,14 +745,31 @@ func handleDaemon() {
 				cfg = newCfg
 				srv.Stop()
 				proxySrv.Stop()
+				if tunStack != nil {
+					tunStack.Stop()
+					tunStack = nil
+				}
+
 				srv = resolver.New(cfg)
 				proxySrv = proxy.New(cfg)
 				_ = srv.Start()
 				_ = proxySrv.Start()
+
+				newActive := cfg.GetActive()
+				if newActive != nil && newActive.TUN {
+					ts, err := tun.NewStack(cfg)
+					if err == nil && ts.Start() == nil {
+						tunStack = ts
+						log.Printf("[smartdns] TUN adapter '%s' reloaded", tunStack.DeviceName())
+					}
+				}
 			}
 			continue
 		}
 		log.Println("[smartdns] Shutting down...")
+		if tunStack != nil {
+			tunStack.Stop()
+		}
 		srv.Stop()
 		proxySrv.Stop()
 		break
@@ -1160,6 +1204,60 @@ func handleBypass() {
 		fmt.Printf("%s✓ Removed '%s' from bypass list for profile '%s'. Daemon reloaded.%s\n", tester.Green, domain, active.Name, tester.Reset)
 	default:
 		fmt.Printf("%sUnknown bypass action: %s%s (use: add, remove, list)\n", tester.Red, action, tester.Reset)
+		os.Exit(1)
+	}
+}
+
+func handleTUN() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("%sConfig error: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	active := cfg.GetActive()
+	if active == nil {
+		fmt.Printf("%sNo active profile configured%s\n", tester.Red, tester.Reset)
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 {
+		statusStr := fmt.Sprintf("%sDisabled%s", tester.Yellow, tester.Reset)
+		if active.TUN {
+			statusStr = fmt.Sprintf("%sEnabled%s", tester.Green, tester.Reset)
+		}
+		fmt.Printf("\n%sVirtual TUN Adapter (Global Transparent Proxy)%s\n", tester.Bold, tester.Reset)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf(" Active Profile     : %s%s%s\n", tester.Cyan, active.Name, tester.Reset)
+		fmt.Printf(" State              : %s\n", statusStr)
+		fmt.Printf(" Subnet Routing     : 198.18.0.0/15 (Fake-IP tun2socks)\n")
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf("Usage:\n  smartdns tun on      - Enable Global TUN mode (transparent proxy for all apps)\n  smartdns tun off     - Disable Global TUN mode\n  smartdns tun status  - Show TUN adapter status\n\n")
+		return
+	}
+
+	action := strings.ToLower(os.Args[2])
+	switch action {
+	case "on", "enable":
+		active.TUN = true
+		active.FakeIP = true // TUN requires Fake-IP to route domains into 198.18.0.0/15
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ TUN mode enabled for profile '%s'. Fake-IP enabled. Daemon reloaded.%s\n", tester.Green, active.Name, tester.Reset)
+		fmt.Println("  All system applications now route through SmartDNS transparently without proxy settings.")
+	case "off", "disable":
+		active.TUN = false
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ TUN mode disabled for profile '%s'. Daemon reloaded.%s\n", tester.Yellow, active.Name, tester.Reset)
+	case "status":
+		statusStr := "disabled"
+		if active.TUN {
+			statusStr = "enabled"
+		}
+		fmt.Printf("TUN mode: profile '%s', state: %s (198.18.0.0/15)\n", active.Name, statusStr)
+	default:
+		fmt.Printf("%sUnknown tun action: %s%s (use: on, off, status)\n", tester.Red, action, tester.Reset)
 		os.Exit(1)
 	}
 }

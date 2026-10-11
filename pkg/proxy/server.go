@@ -94,7 +94,9 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) dial(target string) (net.Conn, error) {
+// Dial connects to the target address, resolving Fake-IPs to original domains
+// and routing through the upstream proxy if configured.
+func Dial(cfg *config.Config, network, target string) (net.Conn, error) {
 	// If target is in Fake-IP format (e.g. 198.18.0.1:443), restore original domain
 	host, port, err := net.SplitHostPort(target)
 	if err == nil {
@@ -105,13 +107,15 @@ func (s *Server) dial(target string) (net.Conn, error) {
 		}
 	}
 
-	active := s.cfg.GetActive()
-	if active != nil && active.ProxyUpstream != "" {
-		u, err := url.Parse(active.ProxyUpstream)
-		if err == nil {
-			dialer, err := proxy.FromURL(u, proxy.Direct)
+	if network == "tcp" && cfg != nil {
+		active := cfg.GetActive()
+		if active != nil && active.ProxyUpstream != "" {
+			u, err := url.Parse(active.ProxyUpstream)
 			if err == nil {
-				return dialer.Dial("tcp", target)
+				dialer, err := proxy.FromURL(u, proxy.Direct)
+				if err == nil {
+					return dialer.Dial("tcp", target)
+				}
 			}
 		}
 	}
@@ -120,7 +124,11 @@ func (s *Server) dial(target string) (net.Conn, error) {
 		Timeout:   5 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
-	return d.Dial("tcp", target)
+	return d.Dial(network, target)
+}
+
+func (s *Server) dial(target string) (net.Conn, error) {
+	return Dial(s.cfg, "tcp", target)
 }
 
 func (s *Server) handleConnection(rawConn net.Conn) {
