@@ -14,8 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
+	"smartnet/pkg/vless"
 
 	"golang.org/x/net/proxy"
 )
@@ -107,14 +108,23 @@ func Dial(cfg *config.Config, network, target string) (net.Conn, error) {
 		}
 	}
 
-	if network == "tcp" && cfg != nil {
+	if cfg != nil {
 		active := cfg.GetActive()
-		if active != nil && active.ProxyUpstream != "" {
-			u, err := url.Parse(active.ProxyUpstream)
-			if err == nil {
-				dialer, err := proxy.FromURL(u, proxy.Direct)
+		if active != nil {
+			// If VPN mode is active and VLESS is configured, tunnel through VLESS-Reality!
+			if active.VPN && active.VLESS != nil {
+				d := vless.NewDialer(active.VLESS)
+				return d.Dial(network, target)
+			}
+
+			// If proxy upstream is configured, route through SOCKS5
+			if network == "tcp" && active.ProxyUpstream != "" {
+				u, err := url.Parse(active.ProxyUpstream)
 				if err == nil {
-					return dialer.Dial("tcp", target)
+					dialer, err := proxy.FromURL(u, proxy.Direct)
+					if err == nil {
+						return dialer.Dial("tcp", target)
+					}
 				}
 			}
 		}

@@ -1,4 +1,4 @@
-module smartdns
+module smartnet
 
 go 1.27.1
 

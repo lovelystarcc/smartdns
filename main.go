@@ -15,41 +15,48 @@ import (
 	"syscall"
 	"time"
 
-	"smartdns/pkg/completion"
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
-	"smartdns/pkg/network"
-	"smartdns/pkg/proxy"
-	"smartdns/pkg/resolver"
-	"smartdns/pkg/rules"
-	"smartdns/pkg/service"
-	"smartdns/pkg/tester"
-	"smartdns/pkg/tun"
+	"smartnet/pkg/completion"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
+	"smartnet/pkg/network"
+	"smartnet/pkg/proxy"
+	"smartnet/pkg/resolver"
+	"smartnet/pkg/rules"
+	"smartnet/pkg/service"
+	"smartnet/pkg/tester"
+	"smartnet/pkg/tun"
+	"smartnet/pkg/vless"
 
 	"github.com/miekg/dns"
 )
 
-const Version = "1.8.0"
+const Version = "2.0.0"
 
 func printHelp() {
-	fmt.Printf(`%sSmartDNS CLI v%s%s — SmartDNS / DNS-over-HTTPS Manager and Proxy
+	fmt.Printf(`%sSmartNet CLI v%s%s — Next-Gen SmartDNS, VLESS-Reality VPN & Transparent TUN Proxy
 
 %sUSAGE:%s
-  smartdns <command> [arguments...]
+  smartnet <command> [arguments...]
 
 %sCORE COMMANDS:%s
   %son%s [profile]      Enable SmartDNS on the active network interface
   %soff%s              Disable SmartDNS (revert to default DHCP)
   %stoggle%s           Toggle state (enable / disable)
-  %sstatus%s           Show service, network interface, egress IP, and DNS status
+  %sstatus%s           Show hybrid status (DNS, VPN, TUN, Egress IP)
   %stest%s [domains...] Test latency, TLS ping, and routing to domains
-  %supdate%s           Update SmartDNS to latest version from GitHub
+  %supdate%s           Update SmartNet to latest version from GitHub
   %scompletion%s <sh>  Generate shell completion script (fish, zsh, bash, powershell)
+
+%sVPN & ANTI-CENSORSHIP TUNNEL (VLESS-REALITY):%s
+  %svpn%s [on|off|status]      Toggle VLESS-Reality VPN tunnel (anti-DPI camouflage)
+  %svpn%s set <vless://...>    Configure VLESS Reality server URI for active profile
+
+%sGLOBAL TUN ADAPTER (TRANSPARENT PROXY):%s
+  %stun%s [on|off|status]      Manage Virtual TUN adapter (tun2socks transparent mode)
 
 %sSPLIT DNS & FAKE-IP ENGINE:%s
   %sfakeip%s [on|off|status|clear] Manage zero-latency Fake-IP engine (198.18.0.0/15)
   %sbypass%s [add|remove|list]   Manage direct resolution whitelist (.ru, banks, gov)
-  %stun%s [on|off|status]        Manage Virtual TUN adapter (tun2socks transparent mode)
 
 %sDEVELOPER TOOLS & PROXY BRIDGE:%s
   %srun%s [--] <cmd...> Run command with proxy environment injected (curl, git, brew)
@@ -57,10 +64,10 @@ func printHelp() {
   %sproxy%s status|run Manage local Mixed HTTP/SOCKS5 proxy bridge (127.0.0.1:7890)
 
 %sPROFILE MANAGEMENT:%s
-  %slist%s             List all configured DNS profiles
-  %suse%s <name>        Switch active DNS profile
+  %slist%s             List all configured profiles
+  %suse%s <name>        Switch active profile
   %sadd%s <name> <url> [backup]  Add a new DoH profile (with optional secondary DoH)
-  %sremove%s <name>     Remove a DNS profile
+  %sremove%s <name>     Remove a profile
 
 %sQUICK SETUP ON A NEW PC:%s
   %ssetup%s <url> [name] Configure everything in one command (service + profile + network)
@@ -71,14 +78,13 @@ func printHelp() {
   %sdaemon%s           Run DNS server, proxy bridge, and TUN adapter in foreground
 
 %sEXAMPLES:%s
-  smartdns setup https://dns.example.com/dns-query personal
-  smartdns on
-  smartdns tun on      # Enable Virtual TUN adapter (global transparent proxy)
-  smartdns fakeip on   # Enable 0ms Fake-IP mode
-  smartdns bypass add okko.tv
-  smartdns run -- curl -I https://blocked-site.com
-  smartdns test
-  smartdns off
+  smartnet setup https://dns.example.com/dns-query personal
+  smartnet on
+  smartnet vpn set vless://uuid@server:443?security=reality&sni=gateway.icloud.com&pbk=key&sid=id
+  smartnet vpn on      # Enable anti-DPI VLESS-Reality tunnel
+  smartnet tun on      # Route all system traffic transparently
+  smartnet status
+  smartnet off
 `,
 		tester.Bold, Version, tester.Reset,
 		tester.Bold, tester.Reset,
@@ -91,7 +97,11 @@ func printHelp() {
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
+		tester.Green, tester.Reset,
 		tester.Cyan, tester.Reset,
+		tester.Bold, tester.Reset,
+		tester.Cyan, tester.Reset,
+		tester.Bold, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Bold, tester.Reset,
@@ -123,7 +133,7 @@ func main() {
 
 	switch cmd {
 	case "version", "-v", "--version":
-		fmt.Printf("smartdns version %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("smartnet (smartdns) version %s (%s/%s)\n", Version, runtime.GOOS, runtime.GOARCH)
 
 	case "help", "-h", "--help":
 		printHelp()
@@ -139,6 +149,12 @@ func main() {
 
 	case "status":
 		handleStatus()
+
+	case "dns":
+		handleDNS()
+
+	case "vpn":
+		handleVPN()
 
 	case "test":
 		handleTest()
@@ -360,13 +376,26 @@ func handleStatus() {
 	fmt.Printf(" Fake-IP Engine (198.18.0.0/15)  : %s\n", fakeIPStr)
 
 	// 7. Virtual TUN Adapter
-	tunStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartdns tun on')", tester.Yellow, tester.Reset)
+	tunStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartnet tun on')", tester.Yellow, tester.Reset)
 	if active != nil && active.TUN {
 		tunStr = fmt.Sprintf("%s● Active%s (198.18.0.0/15 -> userspace netstack)", tester.Green, tester.Reset)
 	}
 	fmt.Printf(" Virtual TUN Adapter             : %s\n", tunStr)
 
-	// 8. Auto-Fallback Protection
+	// 8. VPN Tunnel (VLESS-Reality)
+	vpnStr := fmt.Sprintf("%s● Inactive%s (enable with 'smartnet vpn on')", tester.Yellow, tester.Reset)
+	if active != nil && active.VPN {
+		serverName := "configured"
+		if active.VLESS != nil {
+			serverName = fmt.Sprintf("%s:%d (SNI: %s)", active.VLESS.Server, active.VLESS.Port, active.VLESS.ServerName)
+		}
+		vpnStr = fmt.Sprintf("%s● Active%s (%s)", tester.Green, tester.Reset, serverName)
+	} else if active != nil && active.VLESS != nil {
+		vpnStr = fmt.Sprintf("%s● Ready%s (server: %s:%d, toggle with 'smartnet vpn on')", tester.Cyan, tester.Reset, active.VLESS.Server, active.VLESS.Port)
+	}
+	fmt.Printf(" VPN Tunnel (VLESS-Reality)      : %s\n", vpnStr)
+
+	// 9. Auto-Fallback Protection
 	gw := network.GetPhysicalGateway()
 	fallbacks := []string{"1.1.1.1", "8.8.8.8", "77.88.8.8"}
 	if gw != "" {
@@ -374,13 +403,13 @@ func handleStatus() {
 	}
 	fmt.Printf(" Auto-Fallback Protection        : %s● Active%s (%s)\n", tester.Green, tester.Reset, strings.Join(fallbacks, ", "))
 
-	// 8. Public Egress IP
+	// 10. Public Egress IP
 	if pubIP, err := network.GetPublicIP(); err == nil && pubIP != nil {
 		fmt.Printf(" Public Egress IP                : %s● %s%s\n", tester.Cyan, pubIP.String(), tester.Reset)
 	}
 
 	fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
-	fmt.Printf(" Total profiles: %d (use %ssmartdns list%s)\n\n", len(cfg.Profiles), tester.Cyan, tester.Reset)
+	fmt.Printf(" Total profiles: %d (use %ssmartnet list%s)\n\n", len(cfg.Profiles), tester.Cyan, tester.Reset)
 }
 
 func handleTest() {
@@ -960,15 +989,25 @@ func handleProxy() {
 }
 
 func handleUpdate() {
-	fmt.Printf("%s==> Checking and downloading latest SmartDNS release...%s\n", tester.Bold, tester.Reset)
+	fmt.Printf("%s==> Checking and downloading latest SmartNet release...%s\n", tester.Bold, tester.Reset)
 
-	binName := fmt.Sprintf("smartdns-%s-%s", runtime.GOOS, runtime.GOARCH)
+	binName := fmt.Sprintf("smartnet-%s-%s", runtime.GOOS, runtime.GOARCH)
+	legacyBinName := fmt.Sprintf("smartdns-%s-%s", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		binName += ".exe"
+		legacyBinName += ".exe"
 	}
-	downloadURL := fmt.Sprintf("https://github.com/lovelystarcc/smartdns/releases/latest/download/%s", binName)
 
+	downloadURL := fmt.Sprintf("https://github.com/lovelystarcc/smartnet/releases/latest/download/%s", binName)
 	resp, err := http.Get(downloadURL)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		fallbackURL := fmt.Sprintf("https://github.com/lovelystarcc/smartnet/releases/latest/download/%s", legacyBinName)
+		resp, err = http.Get(fallbackURL)
+	}
+
 	if err != nil {
 		fmt.Printf("%sFailed to fetch release: %v%s\n", tester.Red, err, tester.Reset)
 		os.Exit(1)
@@ -980,7 +1019,7 @@ func handleUpdate() {
 		os.Exit(1)
 	}
 
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("smartdns_update_%d", os.Getpid()))
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("smartnet_update_%d", os.Getpid()))
 	if runtime.GOOS == "windows" {
 		tmpFile += ".exe"
 	}
@@ -998,7 +1037,7 @@ func handleUpdate() {
 	}
 	out.Close()
 
-	// On macOS Apple Silicon: apply ad-hoc codesign
+	// On macOS: apply ad-hoc codesign
 	if runtime.GOOS == "darwin" {
 		_ = exec.Command("codesign", "-s", "-", "-f", tmpFile).Run()
 	}
@@ -1007,9 +1046,9 @@ func handleUpdate() {
 	execPath, err := os.Executable()
 	if err != nil {
 		if runtime.GOOS == "windows" {
-			execPath = "smartdns.exe"
+			execPath = "smartnet.exe"
 		} else {
-			execPath = "/usr/local/bin/smartdns"
+			execPath = "/usr/local/bin/smartnet"
 		}
 	}
 	execPath, _ = filepath.EvalSymlinks(execPath)
@@ -1050,6 +1089,14 @@ func handleUpdate() {
 			}
 		}
 		_ = os.Chmod(execPath, 0755)
+
+		// Create backward-compatibility symlink for smartdns -> smartnet
+		dir := filepath.Dir(execPath)
+		symlinkTarget := filepath.Join(dir, "smartdns")
+		if execPath != symlinkTarget {
+			_ = os.Remove(symlinkTarget)
+			_ = os.Symlink(execPath, symlinkTarget)
+		}
 	}
 
 	fmt.Printf("%s✓ Updated successfully at %s%s\n", tester.Green, execPath, tester.Reset)
@@ -1261,6 +1308,140 @@ func handleTUN() {
 		os.Exit(1)
 	}
 }
+
+func handleDNS() {
+	if len(os.Args) < 3 {
+		fmt.Printf(`%sSmartNet DNS Management%s
+
+Usage:
+  smartnet dns on [profile]   - Enable SmartDNS on active network interface
+  smartnet dns off            - Disable SmartDNS (restore DHCP)
+  smartnet dns toggle         - Toggle DNS on/off
+  smartnet dns status         - Show DNS status
+`, tester.Bold, tester.Reset)
+		return
+	}
+
+	sub := strings.ToLower(os.Args[2])
+	switch sub {
+	case "on", "enable":
+		handleOn()
+	case "off", "disable":
+		handleOff()
+	case "toggle":
+		handleToggle()
+	case "status":
+		handleStatus()
+	default:
+		fmt.Printf("%sUnknown dns command: %s%s (use: on, off, toggle, status)\n", tester.Red, sub, tester.Reset)
+		os.Exit(1)
+	}
+}
+
+func handleVPN() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("%sConfig error: %v%s\n", tester.Red, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	active := cfg.GetActive()
+	if active == nil {
+		fmt.Printf("%sNo active profile configured%s\n", tester.Red, tester.Reset)
+		os.Exit(1)
+	}
+
+	if len(os.Args) < 3 {
+		statusStr := fmt.Sprintf("%s● Inactive%s", tester.Yellow, tester.Reset)
+		if active.VPN {
+			serverDesc := "configured"
+			if active.VLESS != nil {
+				serverDesc = fmt.Sprintf("%s:%d (SNI: %s)", active.VLESS.Server, active.VLESS.Port, active.VLESS.ServerName)
+			}
+			statusStr = fmt.Sprintf("%s● Active%s (%s)", tester.Green, tester.Reset, serverDesc)
+		} else if active.VLESS != nil {
+			statusStr = fmt.Sprintf("%s● Ready%s (%s:%d)", tester.Cyan, tester.Reset, active.VLESS.Server, active.VLESS.Port)
+		}
+
+		fmt.Printf("\n%sVPN & Anti-Censorship Tunnel (VLESS-Reality)%s\n", tester.Bold, tester.Reset)
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf(" Active Profile     : %s%s%s\n", tester.Cyan, active.Name, tester.Reset)
+		fmt.Printf(" State              : %s\n", statusStr)
+		if active.VLESS != nil {
+			fmt.Printf(" VLESS Server       : %s:%d\n", active.VLESS.Server, active.VLESS.Port)
+			fmt.Printf(" Camouflage (SNI)   : %s\n", active.VLESS.ServerName)
+			if active.VLESS.Flow != "" {
+				fmt.Printf(" Flow               : %s\n", active.VLESS.Flow)
+			}
+			if active.VLESS.PublicKey != "" {
+				fmt.Printf(" Reality Public Key : %s\n", active.VLESS.PublicKey)
+			}
+		} else {
+			fmt.Printf(" VLESS Config       : %sNot configured%s\n", tester.Yellow, tester.Reset)
+		}
+		fmt.Println(tester.Dim + "─────────────────────────────────────────────────────────────────" + tester.Reset)
+		fmt.Printf("Usage:\n")
+		fmt.Printf("  smartnet vpn set <vless://...>  - Configure VLESS Reality server URI\n")
+		fmt.Printf("  smartnet vpn on                 - Enable VLESS Reality tunnel\n")
+		fmt.Printf("  smartnet vpn off                - Disable VLESS Reality tunnel\n")
+		fmt.Printf("  smartnet vpn status             - Show current VPN tunnel status\n\n")
+		return
+	}
+
+	action := strings.ToLower(os.Args[2])
+	switch action {
+	case "on", "enable":
+		if active.VLESS == nil {
+			fmt.Printf("%s⚠️ No VLESS configuration found for profile '%s'.%s\nConfigure it first:\n  smartnet vpn set vless://uuid@server:port?security=reality&sni=...&pbk=...\n", tester.Yellow, active.Name, tester.Reset)
+			os.Exit(1)
+		}
+		active.VPN = true
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ VLESS-Reality VPN tunnel enabled for profile '%s'.%s\n", tester.Green, active.Name, tester.Reset)
+		fmt.Printf("  All proxied and transparent traffic is now routed through %s:%d\n", active.VLESS.Server, active.VLESS.Port)
+	case "off", "disable":
+		active.VPN = false
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ VLESS-Reality VPN tunnel disabled for profile '%s'.%s\n", tester.Yellow, active.Name, tester.Reset)
+	case "set":
+		if len(os.Args) < 4 {
+			fmt.Printf("%sUsage: smartnet vpn set <vless://...>%s\n", tester.Yellow, tester.Reset)
+			os.Exit(1)
+		}
+		rawURL := os.Args[3]
+		vlessCfg, err := vless.ParseURL(rawURL)
+		if err != nil {
+			fmt.Printf("%sError parsing VLESS URL: %v%s\n", tester.Red, err, tester.Reset)
+			os.Exit(1)
+		}
+		active.VLESS = vlessCfg
+		_ = cfg.Save()
+		_ = service.Restart()
+		fmt.Printf("%s✓ VLESS Reality configured for profile '%s':%s\n", tester.Green, active.Name, tester.Reset)
+		fmt.Printf("  Server     : %s:%d\n", vlessCfg.Server, vlessCfg.Port)
+		fmt.Printf("  Camouflage : %s\n", vlessCfg.ServerName)
+		if vlessCfg.Flow != "" {
+			fmt.Printf("  Flow       : %s\n", vlessCfg.Flow)
+		}
+		fmt.Printf("\nRun %ssmartnet vpn on%s to activate the tunnel.\n", tester.Cyan, tester.Reset)
+	case "status":
+		statusStr := "disabled"
+		if active.VPN {
+			statusStr = "enabled"
+		}
+		server := "none"
+		if active.VLESS != nil {
+			server = fmt.Sprintf("%s:%d (SNI: %s)", active.VLESS.Server, active.VLESS.Port, active.VLESS.ServerName)
+		}
+		fmt.Printf("VPN: profile '%s', state: %s, server: %s\n", active.Name, statusStr, server)
+	default:
+		fmt.Printf("%sUnknown vpn action: %s%s (use: on, off, set, status)\n", tester.Red, action, tester.Reset)
+		os.Exit(1)
+	}
+}
+
 
 
 

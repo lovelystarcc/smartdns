@@ -10,17 +10,30 @@ import (
 	"sync"
 )
 
+type VLESSConfig struct {
+	Server     string `json:"server"`
+	Port       int    `json:"port"`
+	UUID       string `json:"uuid"`
+	Flow       string `json:"flow,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
+	ShortID    string `json:"short_id,omitempty"`
+	SpiderX    string `json:"spider_x,omitempty"`
+}
+
 type Profile struct {
-	Name           string   `json:"name"`
-	Upstream       string   `json:"upstream"`
-	BackupUpstream string   `json:"backup_upstream,omitempty"`
-	ProxyUpstream  string   `json:"proxy_upstream,omitempty"`
-	Bootstrap      []string `json:"bootstrap,omitempty"`
-	Desc           string   `json:"description,omitempty"`
-	BypassDomains  []string `json:"bypass_domains,omitempty"`
-	ProxyDomains   []string `json:"proxy_domains,omitempty"`
-	FakeIP         bool     `json:"fake_ip,omitempty"`
-	TUN            bool     `json:"tun,omitempty"`
+	Name           string       `json:"name"`
+	Upstream       string       `json:"upstream"`
+	BackupUpstream string       `json:"backup_upstream,omitempty"`
+	ProxyUpstream  string       `json:"proxy_upstream,omitempty"`
+	Bootstrap      []string     `json:"bootstrap,omitempty"`
+	Desc           string       `json:"description,omitempty"`
+	BypassDomains  []string     `json:"bypass_domains,omitempty"`
+	ProxyDomains   []string     `json:"proxy_domains,omitempty"`
+	FakeIP         bool         `json:"fake_ip,omitempty"`
+	TUN            bool         `json:"tun,omitempty"`
+	VPN            bool         `json:"vpn,omitempty"`
+	VLESS          *VLESSConfig `json:"vless,omitempty"`
 }
 
 type Config struct {
@@ -41,7 +54,7 @@ func DefaultConfig() *Config {
 	}
 }
 
-func GetConfigPath() string {
+func getLegacyConfigPath() string {
 	if custom := os.Getenv("SMARTDNS_CONFIG"); custom != "" {
 		return custom
 	}
@@ -64,7 +77,6 @@ func GetConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err == nil {
 		userPath := filepath.Join(home, ".config", "smartdns", "config.json")
-		// If system config exists and user config doesn't, default to system
 		if _, err := os.Stat("/etc/smartdns/config.json"); err == nil {
 			if _, err2 := os.Stat(userPath); os.IsNotExist(err2) {
 				return "/etc/smartdns/config.json"
@@ -75,11 +87,59 @@ func GetConfigPath() string {
 	return "/etc/smartdns/config.json"
 }
 
+func GetConfigPath() string {
+	if custom := os.Getenv("SMARTNET_CONFIG"); custom != "" {
+		return custom
+	}
+	if custom := os.Getenv("SMARTDNS_CONFIG"); custom != "" {
+		return custom
+	}
+	if runtime.GOOS == "windows" {
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "smartnet", "config.json")
+		}
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			return filepath.Join(programData, "smartnet", "config.json")
+		}
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, ".smartnet", "config.json")
+		}
+		return `C:\ProgramData\smartnet\config.json`
+	}
+	if os.Geteuid() == 0 {
+		return "/etc/smartnet/config.json"
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		userPath := filepath.Join(home, ".config", "smartnet", "config.json")
+		// If system config exists and user config doesn't, default to system
+		if _, err := os.Stat("/etc/smartnet/config.json"); err == nil {
+			if _, err2 := os.Stat(userPath); os.IsNotExist(err2) {
+				return "/etc/smartnet/config.json"
+			}
+		}
+		return userPath
+	}
+	return "/etc/smartnet/config.json"
+}
+
 func Load() (*Config, error) {
 	p := GetConfigPath()
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Auto-migration: check if legacy smartdns config exists
+			legacyPath := getLegacyConfigPath()
+			if legacyData, legacyErr := os.ReadFile(legacyPath); legacyErr == nil {
+				cfg := &Config{}
+				if jsonErr := json.Unmarshal(legacyData, cfg); jsonErr == nil {
+					cfg.path = p
+					_ = cfg.Save() // Migrate immediately into smartnet path
+					return cfg, nil
+				}
+			}
+
 			cfg := DefaultConfig()
 			cfg.path = p
 			_ = cfg.Save()
@@ -234,5 +294,27 @@ func (c *Config) RemoveBypassDomain(name, domain string) error {
 		}
 	}
 	p.BypassDomains = updated
+	return nil
+}
+
+func (c *Config) SetVPN(name string, enabled bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	p.VPN = enabled
+	return nil
+}
+
+func (c *Config) SetVLESS(name string, vless *VLESSConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("profile '%s' not found", name)
+	}
+	p.VLESS = vless
 	return nil
 }

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"smartdns/pkg/fakeip"
-	"smartdns/pkg/network"
-	"smartdns/pkg/rules"
+	"smartnet/pkg/fakeip"
+	"smartnet/pkg/network"
+	"smartnet/pkg/rules"
 
 	"github.com/miekg/dns"
 )

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
-	"smartdns/pkg/proxy"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
+	"smartnet/pkg/proxy"
 
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
 	"strings"
 
 	xproxy "golang.org/x/net/proxy"

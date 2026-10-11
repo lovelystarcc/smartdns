@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
 
 	"golang.zx2c4.com/wireguard/tun"
 )

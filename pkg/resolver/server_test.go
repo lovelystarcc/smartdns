@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
-	"smartdns/pkg/config"
-	"smartdns/pkg/fakeip"
+	"smartnet/pkg/config"
+	"smartnet/pkg/fakeip"
 )
 
 func TestIsLocalOrCaptive(t *testing.T) {
