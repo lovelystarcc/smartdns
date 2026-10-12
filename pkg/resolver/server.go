@@ -478,6 +478,16 @@ func (s *Server) handleDNS(w dns.ResponseWriter, r *dns.Msg) {
 	q := r.Question[0]
 	cacheKey := fmt.Sprintf("%s:%d:%d", q.Name, q.Qtype, q.Qclass)
 
+	// 0. Disable browser DoH canary (e.g. Mozilla Firefox Canary domain)
+	// Returning NXDOMAIN instructs browsers to disable internal DoH and use system DNS.
+	cleanQName := strings.ToLower(strings.TrimSuffix(q.Name, "."))
+	if cleanQName == "use-application-dns.net" {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNameError) // NXDOMAIN
+		_ = w.WriteMsg(m)
+		return
+	}
+
 	active := s.cfg.GetActive()
 	var customBypass, customProxy []string
 	fakeIPEnabled := false

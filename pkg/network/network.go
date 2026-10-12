@@ -358,7 +358,9 @@ func ClearStaleRoutes(upstreamURL string) {
 	} else if runtime.GOOS == "linux" {
 		_, _ = runElevatedCommand("ip", "route", "del", ipStr)
 	} else if runtime.GOOS == "windows" {
-		_ = exec.Command("route", "delete", ipStr).Run()
+		cmd := exec.Command("route", "delete", ipStr)
+		hideWindow(cmd)
+		_ = cmd.Run()
 	}
 }
 
@@ -380,7 +382,9 @@ func FlushDNSCache() {
 			_ = exec.Command("systemd-resolve", "--flush-caches").Run()
 		}
 	} else if runtime.GOOS == "windows" {
-		_ = exec.Command("ipconfig", "/flushdns").Run()
+		cmd := exec.Command("ipconfig", "/flushdns")
+		hideWindow(cmd)
+		_ = cmd.Run()
 	}
 }
 
@@ -476,6 +480,7 @@ func windowsActiveInterface() (string, error) {
 	// 1. Query interface with default IPv4 route via PowerShell with UTF-8 encoding
 	psCmd := `$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -ExpandProperty InterfaceAlias -First 1)`
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	hideWindow(cmd)
 	if out, err := cmd.Output(); err == nil {
 		alias := strings.TrimSpace(decodeOEM(out))
 		if alias != "" {
@@ -503,6 +508,7 @@ func windowsGetDNSServers(iface string) ([]string, error) {
 	// 1. Try PowerShell Get-DnsClientServerAddress with UTF-8
 	psCmd := fmt.Sprintf(`$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $alias = '%s'; $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue; if ($adapter) { (Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses } else { (Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses }`, iface)
 	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	hideWindow(cmdPS)
 	if outPS, errPS := cmdPS.Output(); errPS == nil {
 		var servers []string
 		lines := strings.Split(strings.TrimSpace(decodeOEM(outPS)), "\n")
@@ -519,6 +525,7 @@ func windowsGetDNSServers(iface string) ([]string, error) {
 
 	// 2. Fallback: Try netsh interface ip show dns
 	cmd := exec.Command("netsh", "interface", "ip", "show", "dns", "name="+iface)
+	hideWindow(cmd)
 	out, err := cmd.Output()
 	if err == nil {
 		var servers []string
@@ -551,7 +558,7 @@ func windowsSetDNSServers(iface string, servers ...string) error {
 	}
 
 	primary := "127.0.0.1"
-	secondary := "1.1.1.1" // Default secondary safety resolver so network never drops
+	secondary := ""
 	if len(servers) > 0 && servers[0] != "" {
 		primary = servers[0]
 	}
@@ -560,21 +567,25 @@ func windowsSetDNSServers(iface string, servers ...string) error {
 	}
 
 	// 1. Try modern PowerShell Set-DnsClientServerAddress with UTF-8
-	psArray := fmt.Sprintf("@('%s', '%s')", primary, secondary)
-	if secondary == "" {
-		psArray = fmt.Sprintf("@('%s')", primary)
+	psArray := fmt.Sprintf("@('%s')", primary)
+	if secondary != "" {
+		psArray = fmt.Sprintf("@('%s', '%s')", primary, secondary)
 	}
-	psCmd := fmt.Sprintf(`$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $alias = '%s'; $addrs = %s; $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue; if ($adapter) { Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $addrs -ErrorAction Stop } else { Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $addrs -ErrorAction Stop }`, iface, psArray)
+	psCmd := fmt.Sprintf(`$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $alias = '%s'; $addrs = %s; $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue; if ($adapter) { Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $addrs -ErrorAction Stop; Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv6 -ResetServerAddresses -ErrorAction SilentlyContinue } else { Set-DnsClientServerAddress -InterfaceAlias $alias -ServerAddresses $addrs -ErrorAction Stop }`, iface, psArray)
 	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	hideWindow(cmdPS)
 	if outPS, errPS := cmdPS.CombinedOutput(); errPS == nil {
 		return nil
 	} else {
 		// 2. Fallback to netsh
 		cmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name="+iface, "static", primary)
+		hideWindow(cmd)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			if secondary != "" {
-				_ = exec.Command("netsh", "interface", "ip", "add", "dns", "name="+iface, secondary, "index=2").Run()
+				cmd2 := exec.Command("netsh", "interface", "ip", "add", "dns", "name="+iface, secondary, "index=2")
+				hideWindow(cmd2)
+				_ = cmd2.Run()
 			}
 			return nil
 		}
@@ -586,12 +597,14 @@ func windowsResetDNSServers(iface string) error {
 	// 1. Try PowerShell Set-DnsClientServerAddress -ResetServerAddresses with UTF-8
 	psCmd := fmt.Sprintf(`$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $alias = '%s'; $adapter = Get-NetAdapter -Name $alias -ErrorAction SilentlyContinue; if ($adapter) { Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses -ErrorAction Stop } else { Set-DnsClientServerAddress -InterfaceAlias $alias -ResetServerAddresses -ErrorAction Stop }`, iface)
 	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	hideWindow(cmdPS)
 	if err := cmdPS.Run(); err == nil {
 		return nil
 	}
 
 	// 2. Fallback to netsh
 	cmd := exec.Command("netsh", "interface", "ip", "set", "dns", "name="+iface, "dhcp")
+	hideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to reset DNS to DHCP: %s", decodeOEM(out))
@@ -617,6 +630,7 @@ func windowsGetPhysicalGateway() string {
 	// 1. Try PowerShell NextHop for default route
 	psCmd := "(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NextHop -First 1)"
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
+	hideWindow(cmd)
 	if out, err := cmd.Output(); err == nil {
 		hop := strings.TrimSpace(string(out))
 		if ip := net.ParseIP(hop); ip != nil && !ip.IsUnspecified() {
@@ -626,6 +640,7 @@ func windowsGetPhysicalGateway() string {
 
 	// 2. Fallback: parse route print
 	cmdRoute := exec.Command("route", "print", "0.0.0.0")
+	hideWindow(cmdRoute)
 	if out, err := cmdRoute.Output(); err == nil {
 		lines := strings.Split(string(out), "\n")
 		for _, l := range lines {

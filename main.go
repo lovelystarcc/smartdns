@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,7 +33,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "2.0.6"
+const Version = "2.0.7"
 
 func printHelp() {
 	fmt.Printf(`%sSmartNet CLI v%s%s — DNS, VLESS-Reality VPN & Transparent TUN Proxy
@@ -292,32 +291,19 @@ func handleOn() {
 		}
 	}
 
-	fallbackDNS := "1.1.1.1"
-	if len(active.Bootstrap) > 0 {
-		for _, b := range active.Bootstrap {
-			host := b
-			if h, _, err := net.SplitHostPort(b); err == nil {
-				host = h
-			}
-			if ip := net.ParseIP(host); ip != nil && ip.To4() != nil && !ip.IsLoopback() {
-				fallbackDNS = ip.String()
-				break
-			}
-		}
-	}
-
-	if err := network.SetDNSServers(iface, "127.0.0.1", fallbackDNS); err != nil {
+	if err := network.SetDNSServers(iface, "127.0.0.1"); err != nil {
 		fmt.Printf("%sFailed to enable DNS: %v%s\n", tester.Red, err, tester.Reset)
 		os.Exit(1)
 	}
+	network.FlushDNSCache()
 
 	profileName := cfg.ActiveProfile
 	vpnSuffix := ""
 	if active.VPN {
 		vpnSuffix = fmt.Sprintf(" %s[VPN: Active]%s", tester.Green, tester.Reset)
 	}
-	fmt.Printf("%sDNS enabled (Primary: 127.0.0.1, Fallback: %s)%s on interface %s%s%s [Profile: %s%s%s]%s\n",
-		tester.Green, fallbackDNS, tester.Reset,
+	fmt.Printf("%sDNS enabled (127.0.0.1)%s on interface %s%s%s [Profile: %s%s%s]%s\n",
+		tester.Green, tester.Reset,
 		tester.Bold, iface, tester.Reset,
 		tester.Cyan, profileName, tester.Reset,
 		vpnSuffix,
@@ -733,6 +719,7 @@ Example:
 	if err := network.SetDNSServers(iface, "127.0.0.1"); err != nil {
 		fmt.Printf("%s [!] Failed to enable system DNS: %v%s\n", tester.Red, err, tester.Reset)
 	} else {
+		network.FlushDNSCache()
 		fmt.Printf(" [3/4] DNS enabled on interface %s (127.0.0.1)\n", iface)
 	}
 
