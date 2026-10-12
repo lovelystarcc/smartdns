@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"smartnet/pkg/config"
 	"smartnet/pkg/network"
 
 	"github.com/miekg/dns"
@@ -356,13 +357,20 @@ func IsSystemDNSSet(iface string) bool {
 }
 
 func windowsInstall(absBin string) error {
-	// Clean up legacy smartdns task
 	_ = exec.Command("schtasks", "/delete", "/tn", "smartdns", "/f").Run()
+	_ = exec.Command("schtasks", "/delete", "/tn", "smartnet", "/f").Run()
 
-	taskCmd := fmt.Sprintf(`"%s" daemon`, absBin)
+	logPath := config.GetLogPath()
+	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+
+	taskCmd := fmt.Sprintf(`cmd /c ""%s" daemon >> "%s" 2>&1"`, absBin, logPath)
 	cmd := exec.Command("schtasks", "/create", "/tn", "smartnet", "/tr", taskCmd, "/sc", "onlogon", "/rl", "highest", "/f")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to create scheduled task: %w (%s)", err, string(out))
+	if _, err := cmd.CombinedOutput(); err != nil {
+		simpleCmd := fmt.Sprintf(`"%s" daemon`, absBin)
+		cmd2 := exec.Command("schtasks", "/create", "/tn", "smartnet", "/tr", simpleCmd, "/sc", "onlogon", "/rl", "highest", "/f")
+		if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("failed to create scheduled task: %w (%s)", err2, string(out2))
+		}
 	}
 	return Start()
 }
@@ -381,23 +389,51 @@ func windowsStart() error {
 	}
 	// Try schtasks smartnet first, then legacy smartdns
 	if err := exec.Command("schtasks", "/run", "/tn", "smartnet").Run(); err == nil {
-		return nil
+		for i := 0; i < 20; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if IsListening() {
+				return nil
+			}
+		}
 	}
 	if err := exec.Command("schtasks", "/run", "/tn", "smartdns").Run(); err == nil {
-		return nil
+		for i := 0; i < 20; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if IsListening() {
+				return nil
+			}
+		}
 	}
+
 	// Fallback to powershell background process
-	psCmd := "Start-Process -FilePath 'smartnet' -ArgumentList 'daemon' -WindowStyle Hidden"
+	absBin, err := os.Executable()
+	if err != nil {
+		absBin = "smartnet.exe"
+	}
+	logPath := config.GetLogPath()
+	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+
+	psCmd := fmt.Sprintf(`Start-Process -FilePath '%s' -ArgumentList 'daemon' -WindowStyle Hidden -RedirectStandardOutput '%s' -RedirectStandardError '%s'`,
+		absBin, logPath, logPath)
 	cmdPS := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd)
 	_ = cmdPS.Start()
+
+	for i := 0; i < 30; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if IsListening() {
+			return nil
+		}
+	}
 	return nil
 }
 
 func windowsStop() error {
+	currentPID := os.Getpid()
 	_ = exec.Command("schtasks", "/end", "/tn", "smartnet").Run()
 	_ = exec.Command("schtasks", "/end", "/tn", "smartdns").Run()
-	_ = exec.Command("taskkill", "/f", "/im", "smartnet.exe").Run()
-	_ = exec.Command("taskkill", "/f", "/im", "smartdns.exe").Run()
+	// Terminate background processes excluding the current CLI process
+	psCmd := fmt.Sprintf(`Get-Process -Name smartnet,smartdns -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne %d } | Stop-Process -Force -ErrorAction SilentlyContinue`, currentPID)
+	_ = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", psCmd).Run()
 	return nil
 }
 
@@ -408,6 +444,7 @@ func windowsRestart() error {
 }
 
 func windowsStatus() (bool, int, error) {
+	currentPID := os.Getpid()
 	for _, exe := range []string{"smartnet.exe", "smartdns.exe"} {
 		cmd := exec.Command("tasklist", "/fi", fmt.Sprintf("imagename eq %s", exe), "/fo", "csv", "/nh")
 		out, err := cmd.Output()
@@ -420,9 +457,12 @@ func windowsStatus() (bool, int, error) {
 					if strings.EqualFold(name, exe) {
 						pidStr := strings.Trim(fields[1], "\" ")
 						if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
+							// Filter out the current CLI command process!
+							if pid == currentPID {
+								continue
+							}
 							return true, pid, nil
 						}
-						return true, 0, nil
 					}
 				}
 			}

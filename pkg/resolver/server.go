@@ -242,22 +242,43 @@ func (s *Server) Start() error {
 	}
 
 	handler := dns.HandlerFunc(s.handleDNS)
-	s.udpServer = &dns.Server{Addr: addr, Net: "udp", Handler: handler}
-	s.tcpServer = &dns.Server{Addr: addr, Net: "tcp", Handler: handler}
 
-	errCh := make(chan error, 2)
+	// 1. Bind UDP socket synchronously to verify port availability immediately
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve UDP address %s: %w", addr, err)
+	}
+	udpConn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to bind UDP port on %s: %w (check if port 53 is already in use by another service/process)", addr, err)
+	}
+	s.udpServer = &dns.Server{PacketConn: udpConn, Handler: handler}
 
+	// 2. Bind TCP socket synchronously
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		_ = udpConn.Close()
+		return fmt.Errorf("failed to resolve TCP address %s: %w", addr, err)
+	}
+	tcpListener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		_ = udpConn.Close()
+		return fmt.Errorf("failed to bind TCP port on %s: %w (check if port 53 is already in use by another service/process)", addr, err)
+	}
+	s.tcpServer = &dns.Server{Listener: tcpListener, Handler: handler}
+
+	log.Printf("[smartnet] DNS server successfully bound to %s (UDP/TCP)", addr)
+
+	// 3. Serve requests in background
 	go func() {
-		log.Printf("[smartnet] Listening UDP on %s", addr)
-		if err := s.udpServer.ListenAndServe(); err != nil {
-			errCh <- err
+		if err := s.udpServer.ActivateAndServe(); err != nil {
+			log.Printf("[smartnet] UDP server error: %v", err)
 		}
 	}()
 
 	go func() {
-		log.Printf("[smartnet] Listening TCP on %s", addr)
-		if err := s.tcpServer.ListenAndServe(); err != nil {
-			errCh <- err
+		if err := s.tcpServer.ActivateAndServe(); err != nil {
+			log.Printf("[smartnet] TCP server error: %v", err)
 		}
 	}()
 
@@ -267,12 +288,7 @@ func (s *Server) Start() error {
 	// Background health checker and auto-recovery
 	go s.healthCheckLoop()
 
-	select {
-	case err := <-errCh:
-		return err
-	case <-time.After(100 * time.Millisecond):
-		return nil
-	}
+	return nil
 }
 
 func (s *Server) Stop() {

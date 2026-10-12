@@ -108,6 +108,43 @@ func getConsoleUser() string {
 	return ""
 }
 
+func GetLogPath() string {
+	if custom := os.Getenv("SMARTNET_LOG"); custom != "" {
+		return custom
+	}
+	if runtime.GOOS == "windows" {
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			return filepath.Join(programData, "smartnet", "smartnet.log")
+		}
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			return filepath.Join(appData, "smartnet", "smartnet.log")
+		}
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, ".smartnet", "smartnet.log")
+		}
+		return filepath.Join(os.TempDir(), "smartnet.log")
+	}
+	if runtime.GOOS == "darwin" {
+		if os.Geteuid() == 0 {
+			return "/var/log/smartnet.log"
+		}
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, ".config", "smartnet", "smartnet.log")
+		}
+		return "/var/log/smartnet.log"
+	}
+	if os.Geteuid() == 0 {
+		return "/var/log/smartnet.log"
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		return filepath.Join(home, ".config", "smartnet", "smartnet.log")
+	}
+	return "/var/log/smartnet.log"
+}
+
 func GetConfigPath() string {
 	if custom := os.Getenv("SMARTNET_CONFIG"); custom != "" {
 		return custom
@@ -116,13 +153,46 @@ func GetConfigPath() string {
 		return custom
 	}
 	if runtime.GOOS == "windows" {
+		// 1. ProgramData shared config (accessible to both user and background daemon)
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			pdPath := filepath.Join(programData, "smartnet", "config.json")
+			if _, err := os.Stat(pdPath); err == nil {
+				return pdPath
+			}
+		}
+		// 2. APPDATA roaming
+		if appData := os.Getenv("APPDATA"); appData != "" {
+			adPath := filepath.Join(appData, "smartnet", "config.json")
+			if _, err := os.Stat(adPath); err == nil {
+				return adPath
+			}
+		}
+		// 3. User home dir
+		home, err := os.UserHomeDir()
+		if err == nil {
+			userPath := filepath.Join(home, ".config", "smartnet", "config.json")
+			if _, err := os.Stat(userPath); err == nil {
+				return userPath
+			}
+			dotPath := filepath.Join(home, ".smartnet", "config.json")
+			if _, err := os.Stat(dotPath); err == nil {
+				return dotPath
+			}
+		}
+		// 4. Executable directory
+		if exe, err := os.Executable(); err == nil {
+			exeConfig := filepath.Join(filepath.Dir(exe), "config.json")
+			if _, err := os.Stat(exeConfig); err == nil {
+				return exeConfig
+			}
+		}
+		// Default creation path: prefer APPDATA if available, then ProgramData
 		if appData := os.Getenv("APPDATA"); appData != "" {
 			return filepath.Join(appData, "smartnet", "config.json")
 		}
 		if programData := os.Getenv("ProgramData"); programData != "" {
 			return filepath.Join(programData, "smartnet", "config.json")
 		}
-		home, err := os.UserHomeDir()
 		if err == nil {
 			return filepath.Join(home, ".smartnet", "config.json")
 		}
@@ -214,7 +284,22 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	return os.WriteFile(p, data, 0644)
+	if err := os.WriteFile(p, data, 0644); err != nil {
+		return err
+	}
+
+	// On Windows, mirror to ProgramData so background scheduled tasks/services can access it
+	if runtime.GOOS == "windows" {
+		if programData := os.Getenv("ProgramData"); programData != "" {
+			pdPath := filepath.Join(programData, "smartnet", "config.json")
+			if !strings.EqualFold(p, pdPath) {
+				_ = os.MkdirAll(filepath.Dir(pdPath), 0755)
+				_ = os.WriteFile(pdPath, data, 0644)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *Config) GetPath() string {

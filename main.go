@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -30,7 +34,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-const Version = "2.0.5"
+const Version = "2.0.6"
 
 func printHelp() {
 	fmt.Printf(`%sSmartNet CLI v%s%s — DNS, VLESS-Reality VPN & Transparent TUN Proxy
@@ -74,6 +78,7 @@ func printHelp() {
   %sservice%s install  Install background service into startup
   %sservice%s start|stop|restart|status|uninstall
   %sdaemon%s           Run DNS server, proxy bridge, and TUN adapter in foreground
+  %slog%s [-f|-n|-c]   Show or follow daemon log output
 
 %sEXAMPLES:%s
   smartnet setup https://dns.example.com/dns-query personal
@@ -112,6 +117,7 @@ func printHelp() {
 		tester.Bold, tester.Reset,
 		tester.Green, tester.Reset,
 		tester.Bold, tester.Reset,
+		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
 		tester.Cyan, tester.Reset,
@@ -175,6 +181,9 @@ func main() {
 
 	case "daemon":
 		handleDaemon()
+
+	case "log", "logs":
+		handleLog()
 
 	case "proxy":
 		handleProxy()
@@ -255,15 +264,49 @@ func handleOn() {
 		}
 	}
 
-	// Ensure background service is running if port 53 is not listening
+	// Ensure background service is running and listening on port 53
 	if !service.IsListening() {
-		running, _, _ := service.Status()
-		if !running {
+		running, pid, _ := service.Status()
+		if running {
+			fmt.Printf("%s⚠️ Stale process detected (PID: %d) but port 53 is not responding. Restarting daemon...%s\n", tester.Yellow, pid, tester.Reset)
+			_ = service.Restart()
+		} else {
 			_ = service.Start()
+		}
+
+		// Wait up to 3 seconds for port 53 to become ready
+		ready := false
+		for i := 0; i < 30; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if service.IsListening() {
+				ready = true
+				break
+			}
+		}
+
+		if !ready {
+			fmt.Printf("%s❌ Error: SmartNet daemon failed to bind port 53 or is not responding.%s\n", tester.Red, tester.Reset)
+			fmt.Printf("%s🛡️ Safety Watchdog: System DNS was NOT changed to protect your internet connection.%s\n", tester.Yellow, tester.Reset)
+			fmt.Printf("Run '%ssmartnet log%s' to inspect daemon startup logs, or run '%ssmartnet daemon%s' in a console.\n", tester.Bold, tester.Reset, tester.Bold, tester.Reset)
+			os.Exit(1)
 		}
 	}
 
-	if err := network.SetDNSServers(iface, "127.0.0.1"); err != nil {
+	fallbackDNS := "1.1.1.1"
+	if len(active.Bootstrap) > 0 {
+		for _, b := range active.Bootstrap {
+			host := b
+			if h, _, err := net.SplitHostPort(b); err == nil {
+				host = h
+			}
+			if ip := net.ParseIP(host); ip != nil && ip.To4() != nil && !ip.IsLoopback() {
+				fallbackDNS = ip.String()
+				break
+			}
+		}
+	}
+
+	if err := network.SetDNSServers(iface, "127.0.0.1", fallbackDNS); err != nil {
 		fmt.Printf("%sFailed to enable DNS: %v%s\n", tester.Red, err, tester.Reset)
 		os.Exit(1)
 	}
@@ -273,8 +316,8 @@ func handleOn() {
 	if active.VPN {
 		vpnSuffix = fmt.Sprintf(" %s[VPN: Active]%s", tester.Green, tester.Reset)
 	}
-	fmt.Printf("%sDNS enabled (127.0.0.1)%s on interface %s%s%s [Profile: %s%s%s]%s\n",
-		tester.Green, tester.Reset,
+	fmt.Printf("%sDNS enabled (Primary: 127.0.0.1, Fallback: %s)%s on interface %s%s%s [Profile: %s%s%s]%s\n",
+		tester.Green, fallbackDNS, tester.Reset,
 		tester.Bold, iface, tester.Reset,
 		tester.Cyan, profileName, tester.Reset,
 		vpnSuffix,
@@ -338,12 +381,17 @@ func handleStatus() {
 
 	// 1. Daemon service status
 	running, pid, _ := service.Status()
+	listening := service.IsListening()
 	serviceStr := ""
 	if running {
-		serviceStr = fmt.Sprintf("%s● Running%s (PID: %d, port 53)", tester.Green, tester.Reset, pid)
+		if listening {
+			serviceStr = fmt.Sprintf("%s● Running%s (PID: %d, port 53 active)", tester.Green, tester.Reset, pid)
+		} else {
+			serviceStr = fmt.Sprintf("%s● Warning: Process alive (PID: %d), but port 53 is NOT responding!%s", tester.Yellow, pid, tester.Reset)
+		}
 	} else {
 		// Check if something else is listening on 53
-		if service.IsListening() {
+		if listening {
 			serviceStr = fmt.Sprintf("%s● Active%s (port 53 in use by another service)", tester.Yellow, tester.Reset)
 		} else {
 			serviceStr = fmt.Sprintf("%s● Stopped%s", tester.Red, tester.Reset)
@@ -763,6 +811,26 @@ func handleService() {
 }
 
 func handleDaemon() {
+	// Configure daemon logging to both file and stderr
+	logPath := config.GetLogPath()
+	_ = os.MkdirAll(filepath.Dir(logPath), 0755)
+	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+		defer logFile.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	}
+
+	// Emergency watchdog on panic: revert DNS to DHCP if port 53 was broken
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[smartnet] FATAL CRASH: %v\n%s", r, debug.Stack())
+			iface, errNet := network.ActiveInterface()
+			if errNet == nil && service.IsSystemDNSSet(iface) {
+				log.Printf("[smartnet] Emergency Watchdog: Reverting DNS on %s to DHCP", iface)
+				_ = network.ResetDNSServers(iface)
+			}
+		}
+	}()
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
@@ -777,7 +845,13 @@ func handleDaemon() {
 
 	srv := resolver.New(cfg)
 	if err := srv.Start(); err != nil {
-		log.Fatalf("Failed to start DNS server: %v", err)
+		log.Printf("[smartnet] Failed to start DNS server: %v", err)
+		iface, errNet := network.ActiveInterface()
+		if errNet == nil && service.IsSystemDNSSet(iface) {
+			log.Printf("[smartnet] Emergency Watchdog: Reverting DNS on %s to DHCP due to port 53 bind failure", iface)
+			_ = network.ResetDNSServers(iface)
+		}
+		log.Fatalf("Aborting daemon due to startup failure: %v", err)
 	}
 
 	proxySrv := proxy.New(cfg)
@@ -837,6 +911,80 @@ func handleDaemon() {
 		srv.Stop()
 		proxySrv.Stop()
 		break
+	}
+}
+
+func handleLog() {
+	logPath := config.GetLogPath()
+	args := os.Args[2:]
+
+	follow := false
+	clear := false
+	linesCount := 50
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-f", "--follow":
+			follow = true
+		case "-c", "--clear":
+			clear = true
+		case "-n", "--lines":
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil && n > 0 {
+					linesCount = n
+					i++
+				}
+			}
+		}
+	}
+
+	if clear {
+		if err := os.Truncate(logPath, 0); err != nil {
+			fmt.Printf("%sFailed to clear log file %s: %v%s\n", tester.Red, logPath, err, tester.Reset)
+			os.Exit(1)
+		}
+		fmt.Printf("%s✓ Log file cleared: %s%s\n", tester.Green, logPath, tester.Reset)
+		return
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("%sLog file not found at %s. No logs recorded yet.%s\n", tester.Yellow, logPath, tester.Reset)
+			return
+		}
+		fmt.Printf("%sFailed to read log file %s: %v%s\n", tester.Red, logPath, err, tester.Reset)
+		os.Exit(1)
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content != "" {
+		lines := strings.Split(content, "\n")
+		start := 0
+		if len(lines) > linesCount {
+			start = len(lines) - linesCount
+		}
+		fmt.Println(strings.Join(lines[start:], "\n"))
+	} else {
+		fmt.Printf("%sLog file is currently empty (%s).%s\n", tester.Dim, logPath, tester.Reset)
+	}
+
+	if follow {
+		f, err := os.Open(logPath)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		_, _ = f.Seek(0, io.SeekEnd)
+		reader := bufio.NewReader(f)
+		for {
+			line, err := reader.ReadString('\n')
+			if err == nil {
+				fmt.Print(line)
+			} else {
+				time.Sleep(200 * time.Millisecond)
+			}
+		}
 	}
 }
 

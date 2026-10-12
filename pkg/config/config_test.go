@@ -185,3 +185,11 @@ func TestLoadCorruptFile(t *testing.T) {
 		t.Error("expected error loading corrupt config, got nil")
 	}
 }
+
+func TestGetLogPath(t *testing.T) {
+	p := GetLogPath()
+	if p == "" {
+		t.Fatal("expected non-empty log path")
+	}
+}
+
